@@ -1,4 +1,4 @@
-import { getMemoryCache, saveMemory, saveNote, saveReminder, logUserMood, getAssociativeContext, saveLongTermFact, getRelationshipStats, getUnspokenThoughts, getRecentJournals, markThoughtAsShared } from './memoryService.js';
+import { getMemoryCache, saveMemory, saveNote, saveReminder, logUserMood, getAssociativeContext, saveLongTermFact, getRelationshipStats, getUnspokenThoughts, getRecentJournals, markThoughtAsShared, appendToHistory } from './memoryService.js';
 import { sendEmailNotification, sendNotificationToCenter, sendJournalEmail } from './emailService.js';
 import { performWebSearch } from './searchService.js';
 import { processLinkForResearch } from './researchService.js';
@@ -33,14 +33,14 @@ export const getInternalThoughtsContext = async (userMessage) => {
     const wantsThoughts = lowerMsg.includes("thought") || lowerMsg.includes("thinking") || lowerMsg.includes("diary") || lowerMsg.includes("monologue") || lowerMsg.includes("soch");
     
     if (wantsThoughts) {
-        const thoughts = getUnspokenThoughts(2);
-        const journals = getRecentJournals(1);
+        const thoughts = await getUnspokenThoughts(2);
+        const journals = await getRecentJournals(1);
         
         let context = "\n[J'S SECRET KNOWLEDGE (Share only if relevant)]\n";
         if (thoughts.length > 0) {
             context += `Recent Unspoken Thoughts: ${JSON.stringify(thoughts)}\n`;
             // Mark the first one as potentially shared so J doesn't repeat it
-            markThoughtAsShared(thoughts[0].id);
+            await markThoughtAsShared(thoughts[0].id);
         }
         if (journals.length > 0) {
             context += `Last Private Journal Excerpt: ${journals[0].content.substring(0, 300)}...\n`;
@@ -56,7 +56,7 @@ export const getInternalThoughtsContext = async (userMessage) => {
  */
 export const findAssociativeLinks = async (userMessage) => {
     try {
-        const context = getAssociativeContext();
+        const context = await getAssociativeContext();
         const client = getClient();
         
         const prompt = `
@@ -168,8 +168,8 @@ export const getRelevantContext = async (userMessage, memory) => {
 };
 
 export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) => {
-  const fullMemory = getMemoryCache();
-  const relationshipStats = getRelationshipStats();
+  const fullMemory = await getMemoryCache();
+  const relationshipStats = await getRelationshipStats();
   
   // 1. Context Retrieval
   const relevantContext = await getRelevantContext(userMessage, fullMemory);
@@ -187,7 +187,7 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
   // 4. Sentiment Analysis
   const sentimentResult = sentimentAnalysis.analyze(userMessage);
   const currentMood = getEmotionLabel(sentimentResult.score);
-  logUserMood(sentimentResult.score, currentMood);
+  await logUserMood(sentimentResult.score, currentMood);
 
   // 5. Web Search Check
   let webContext = "";
@@ -247,17 +247,21 @@ ${secretThoughts}
       
       const lowerMsg = userMessage.toLowerCase();
 
+      // Save interaction to history
+      await appendToHistory('user', userMessage);
+      await appendToHistory('assistant', fullResponse);
+
       // NEW: Manual Journaling Trigger Detection
       const userAskedToJournal = lowerMsg.includes("write your diary") || lowerMsg.includes("diary likh lo") || lowerMsg.includes("reflect on the day") || lowerMsg.includes("journaling shuru karo");
       if (userAskedToJournal) {
           console.log("DEBUG: User manually triggered journaling.");
-          manualTriggerJournaling();
+          await manualTriggerJournaling();
       }
 
       // NEW: Send EXISTING journal via Email upon request
       const userAskedToEmailDiary = (lowerMsg.includes("email") || lowerMsg.includes("mail")) && (lowerMsg.includes("diary") || lowerMsg.includes("journal"));
       if (userAskedToEmailDiary) {
-          const journals = getRecentJournals(1);
+          const journals = await getRecentJournals(1);
           if (journals.length > 0) {
               console.log("DEBUG: User requested existing journal via email.");
               await sendJournalEmail(journals[0].date, journals[0].content, journals[0].mood_tone);
@@ -277,32 +281,26 @@ ${secretThoughts}
           });
           const distilled = JSON.parse(factDistiller.choices[0].message.content);
           if (distilled.fact) {
-              saveLongTermFact(distilled.fact, distilled.category);
+              await saveLongTermFact(distilled.fact, distilled.category);
           }
       }
 
       const lowerResponse = fullResponse.toLowerCase();
 
       // --- INTELLIGENT NOTIFICATION TRIGGER (Strictly AI Intent) ---
-      // We only notify the phone if J explicitly uses her "J Notification Center" marker.
       const aiWantsToNotify = fullResponse.includes("📱 J Notification Center");
 
       if (aiWantsToNotify) {
           console.log("DEBUG: AI explicitly requested a phone notification.");
-          
           let notificationTitle = "A Message from J Secretary";
-          
-          // Extract the title J chose (e.g., "🎉 SYSTEM READY")
           const titleMatch = fullResponse.match(/📱 J Notification Center:\s*([^:\n]+):/);
           if (titleMatch && titleMatch[1]) {
               notificationTitle = titleMatch[1].trim();
           }
-
           await sendNotificationToCenter(notificationTitle, fullResponse, "chat");
       }
 
       // --- INTELLIGENT EMAIL TRIGGER (Strictly AI Intent) ---
-      // We only email if J explicitly says she is sending one.
       const aiWantsToEmail = lowerResponse.includes("email sent") || lowerResponse.includes("sending an email");
 
       if (aiWantsToEmail) {
@@ -321,7 +319,6 @@ ${secretThoughts}
       }
 
       // --- INTELLIGENT REMINDER EXTRACTION ---
-      // We check if either the user asked for a reminder OR J promised one in her response.
       const userAsked = lowerMsg.includes("remind") || lowerMsg.includes("remember") || lowerMsg.includes("notification") || lowerMsg.includes("notify");
       const aiPromised = lowerResponse.includes("remind") || lowerResponse.includes("notification") || lowerResponse.includes("seconds") || lowerResponse.includes("minutes") || lowerResponse.includes("hours");
 
@@ -335,12 +332,7 @@ ${secretThoughts}
                         content: `You are a time-extraction engine. 
                         Task: Extract the specific event and the intended time/delay from the conversation.
                         Current Time: ${currentTime}
-                        
-                        Rules:
-                        1. If the user says "in 5 minutes", calculate the exact ISO timestamp from ${currentTime}.
-                        2. If J says "I will notify you in 2 minutes", that counts as a reminder.
-                        3. Return JSON: {"event": "string", "time": "ISO_TIMESTAMP", "confidence": 0-1}.
-                        4. If no clear time is found, return {"event": null, "time": null}.` 
+                        Return JSON: {"event": "string", "time": "ISO_TIMESTAMP", "confidence": 0-1}.` 
                     },
                     { role: 'user', content: `User said: "${userMessage}"\nJ responded: "${fullResponse}"` }
                 ],
@@ -352,15 +344,14 @@ ${secretThoughts}
             const reminderData = JSON.parse(timeExtraction.choices[0].message.content);
             if (reminderData.time && reminderData.event && reminderData.confidence > 0.6) {
                 console.log(`✅ Automated Reminder Saved: ${reminderData.event} at ${reminderData.time}`);
-                saveReminder(reminderData.event, reminderData.time);
+                await saveReminder(reminderData.event, reminderData.time);
                 if (onReminderSaved) onReminderSaved(reminderData);
             } else if (userAsked && !aiPromised) {
-                // Fallback for user request if no specific time was found but they wanted to "remember" something
-                saveNote(userMessage);
+                await saveNote(userMessage);
             }
         } catch (e) {
             console.error("Reminder extraction failed:", e);
-            if (userAsked) saveNote(userMessage);
+            if (userAsked) await saveNote(userMessage);
         }
       }
 

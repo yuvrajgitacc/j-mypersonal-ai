@@ -20,15 +20,15 @@ fs.ensureDirSync(uploadsDir);
 const upload = multer({ dest: uploadsDir });
 
 // --- Profile Endpoints ---
-router.get('/profile', (req, res) => {
-    const memory = getMemoryCache();
+router.get('/profile', async (req, res) => {
+    const memory = await getMemoryCache();
     // Return the profile from memory or a default if not set
     res.json(memory.profile || { name: "User", email: "user@example.com", memberSince: "March 2026" });
 });
 
 router.post('/profile', async (req, res) => {
     try {
-        const memory = getMemoryCache();
+        const memory = await getMemoryCache();
         memory.profile = { ...memory.profile, ...req.body };
         const success = await saveMemory(memory);
         res.json({ success, profile: memory.profile });
@@ -39,12 +39,13 @@ router.post('/profile', async (req, res) => {
 });
 
 // --- Memory Endpoints ---
-router.get('/memory', (req, res) => {
-    res.json(getMemoryCache());
+router.get('/memory', async (req, res) => {
+    const memory = await getMemoryCache();
+    res.json(memory);
 });
 
-router.get('/docs', (req, res) => {
-    const memory = getMemoryCache();
+router.get('/docs', async (req, res) => {
+    const memory = await getMemoryCache();
     res.json(memory.pdfExtractions || []);
 });
 
@@ -54,7 +55,7 @@ router.delete('/docs/:id', async (req, res) => {
     
     if (archive === 'true') {
         const { archiveDocKnowledge } = await import('../services/memoryService.js');
-        archiveDocKnowledge(id);
+        await archiveDocKnowledge(id);
     }
     
     const success = await deleteMemory('pdfExtractions', id);
@@ -72,21 +73,24 @@ router.delete('/memory/:category/:id', async (req, res) => {
     res.json({ success });
 });
 
-router.get('/memory/search', (req, res) => {
+router.get('/memory/search', async (req, res) => {
     const { q } = req.query;
-    res.json(searchMemory(q || ''));
+    const results = await searchMemory(q || '');
+    res.json(results);
 });
 
 // --- Archive Endpoints ---
 router.get('/memory/archive/dates', async (req, res) => {
     const { getArchiveDates } = await import('../services/memoryService.js');
-    res.json(getArchiveDates());
+    const dates = await getArchiveDates();
+    res.json(dates);
 });
 
 router.get('/memory/archive/:date', async (req, res) => {
     const { date } = req.params;
     const { getHistoryByDate } = await import('../services/memoryService.js');
-    res.json(getHistoryByDate(date));
+    const history = await getHistoryByDate(date);
+    res.json(history);
 });
 
 // --- PDF Handling Endpoint ---

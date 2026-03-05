@@ -20,8 +20,20 @@ export const runMonthlyCleanup = async () => {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const dateStr = thirtyDaysAgo.toISOString().split('T')[0];
 
+    // Check if cloud or local
+    const isCloud = !!process.env.TURSO_DATABASE_URL;
+
     // 1. Get old messages
-    const oldMessages = db.prepare("SELECT * FROM chat_history WHERE timestamp < ?").all(dateStr);
+    let oldMessages = [];
+    if (isCloud) {
+        const res = await db.execute({
+            sql: "SELECT * FROM chat_history WHERE timestamp < ?",
+            args: [dateStr]
+        });
+        oldMessages = res.rows;
+    } else {
+        oldMessages = db.prepare("SELECT * FROM chat_history WHERE timestamp < ?").all(dateStr);
+    }
 
     if (oldMessages.length === 0) {
         console.log("No old messages to clean up.");
@@ -30,13 +42,11 @@ export const runMonthlyCleanup = async () => {
 
     try {
         // 2. Distill the "essence" before deleting
-        // We group by day to not overload the AI
         const groupedByDay = {};
         oldMessages.forEach(m => {
             const day = m.timestamp.split('T')[0];
             if (!groupedByDay[day]) groupedByDay[day] = "";
-            groupedByDay[day] += `${m.role}: ${m.content}
-`;
+            groupedByDay[day] += `${m.role}: ${m.content}\n`;
         });
 
         for (const [day, text] of Object.entries(groupedByDay)) {
@@ -44,7 +54,6 @@ export const runMonthlyCleanup = async () => {
                 You are J's long-term memory architect. 
                 Below is a chat log from ${day}. 
                 Extract any crucial long-term facts, life updates, or project progress that MUST be remembered forever.
-                Ignore casual small talk.
                 Return JSON: {"fact": "distilled important fact", "category": "projects/personal/life"} or {"fact": null}.
             `;
 
@@ -57,12 +66,19 @@ export const runMonthlyCleanup = async () => {
 
             const result = JSON.parse(completion.choices[0].message.content);
             if (result.fact) {
-                saveLongTermFact(result.fact, result.category);
+                await saveLongTermFact(result.fact, result.category);
             }
         }
 
         // 3. Delete raw logs
-        db.prepare("DELETE FROM chat_history WHERE timestamp < ?").run(dateStr);
+        if (isCloud) {
+            await db.execute({
+                sql: "DELETE FROM chat_history WHERE timestamp < ?",
+                args: [dateStr]
+            });
+        } else {
+            db.prepare("DELETE FROM chat_history WHERE timestamp < ?").run(dateStr);
+        }
         console.log(`Cleaned up ${oldMessages.length} old chat logs and preserved key facts.`);
 
     } catch (err) {

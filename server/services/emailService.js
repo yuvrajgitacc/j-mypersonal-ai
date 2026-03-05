@@ -45,7 +45,7 @@ export const sendEmailNotification = async (subject, text, html, category = "gen
     // 1. Send to Notification Center first (Doesn't depend on email credentials)
     await sendNotificationToCenter(subject, text, category);
 
-    const memory = getMemoryCache();
+    const memory = await getMemoryCache();
     const targetEmail = memory.profile?.email;
 
     if (!targetEmail || targetEmail === "user@example.com") {
@@ -75,7 +75,7 @@ export const sendEmailNotification = async (subject, text, html, category = "gen
 };
 
 export const checkAndSendReminders = async () => {
-    const memory = getMemoryCache();
+    const memory = await getMemoryCache();
     
     // Use AI to scan all memory for upcoming stuff
     const events = await scanForUpcomingEvents(memory);
@@ -115,7 +115,7 @@ export const checkAndSendReminders = async () => {
  * Sends J's private journal entry via email.
  */
 export const sendJournalEmail = async (date, content, mood) => {
-    const memory = getMemoryCache();
+    const memory = await getMemoryCache();
     const subject = `J's Secret Journal: ${date} 🌙`;
     
     const html = `
@@ -136,7 +136,7 @@ export const sendJournalEmail = async (date, content, mood) => {
 };
 
 export const checkSpecificReminders = async (io) => {
-    const memory = getMemoryCache();
+    const memory = await getMemoryCache();
     const now = new Date();
     const { markReminderSent } = await import('./memoryService.js');
 
@@ -174,7 +174,7 @@ export const checkSpecificReminders = async (io) => {
                 }
 
                 // 4. Mark as sent in DB
-                markReminderSent(reminder.id);
+                await markReminderSent(reminder.id);
                 console.log(`Triggered specific reminder (Phone + Email): ${reminder.event}`);
             }
         }
