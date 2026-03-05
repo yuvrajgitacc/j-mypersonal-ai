@@ -1,4 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
+import { API_BASE } from "@/lib/config";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import {
@@ -42,7 +43,7 @@ const AppSidebar = ({ isOpen, onClose }: AppSidebarProps) => {
 
   const fetchProfile = async () => {
     try {
-      const response = await fetch("http://localhost:3001/api/profile");
+      const response = await fetch(`${API_BASE}/api/profile`);
       const data = await response.json();
       if (data.name) setUserName(data.name);
     } catch (error) {
@@ -52,7 +53,7 @@ const AppSidebar = ({ isOpen, onClose }: AppSidebarProps) => {
 
   const fetchArchiveDates = async () => {
     try {
-      const response = await fetch("http://localhost:3001/api/memory/archive/dates");
+      const response = await fetch(`${API_BASE}/api/memory/archive/dates`);
       const data = await response.json();
       setArchiveDates(data);
     } catch (error) {
@@ -62,8 +63,8 @@ const AppSidebar = ({ isOpen, onClose }: AppSidebarProps) => {
 
   const handleNav = (path: string) => {
     if (path === "/") {
-        setSelectedDate(null);
-        window.dispatchEvent(new CustomEvent("refreshChat"));
+      setSelectedDate(null);
+      window.dispatchEvent(new CustomEvent("refreshChat"));
     }
     navigate(path);
     onClose();
@@ -72,16 +73,16 @@ const AppSidebar = ({ isOpen, onClose }: AppSidebarProps) => {
   const loadArchive = async (date: string) => {
     setSelectedDate(date);
     try {
-        const response = await fetch(`http://localhost:3001/api/memory/archive/${date}`);
-        const history = await response.json();
-        
-        // Dispatch a custom event for ChatPanel to catch
-        window.dispatchEvent(new CustomEvent("loadArchive", { detail: { date, history } }));
-        
-        navigate("/");
-        onClose();
+      const response = await fetch(`${API_BASE}/api/memory/archive/${date}`);
+      const history = await response.json();
+
+      // Dispatch a custom event for ChatPanel to catch
+      window.dispatchEvent(new CustomEvent("loadArchive", { detail: { date, history } }));
+
+      navigate("/");
+      onClose();
     } catch (error) {
-        console.error("Load archive error:", error);
+      console.error("Load archive error:", error);
     }
   };
 
@@ -132,11 +133,10 @@ const AppSidebar = ({ isOpen, onClose }: AppSidebarProps) => {
                 whileHover={{ x: 4 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => handleNav(item.path)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
-                  active
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${active
                     ? "bg-primary/15 text-primary"
                     : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
-                }`}
+                  }`}
               >
                 <item.icon size={18} />
                 <span>{item.label}</span>
@@ -155,11 +155,10 @@ const AppSidebar = ({ isOpen, onClose }: AppSidebarProps) => {
             <motion.button
               whileHover={{ x: 4 }}
               onClick={() => setIsArchiveOpen(!isArchiveOpen)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
-                isArchiveOpen || selectedDate
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${isArchiveOpen || selectedDate
                   ? "text-foreground bg-secondary/40"
                   : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
-              }`}
+                }`}
             >
               <History size={18} />
               <span className="flex-1 text-left">Filing Cabinet</span>
@@ -184,11 +183,10 @@ const AppSidebar = ({ isOpen, onClose }: AppSidebarProps) => {
                           whileHover={{ x: 4 }}
                           whileTap={{ scale: 0.98 }}
                           onClick={() => loadArchive(date)}
-                          className={`w-full flex items-center gap-3 px-5 py-2 rounded-xl text-[12px] transition-all ${
-                            selectedDate === date
+                          className={`w-full flex items-center gap-3 px-5 py-2 rounded-xl text-[12px] transition-all ${selectedDate === date
                               ? "text-primary font-semibold"
                               : "text-muted-foreground hover:text-foreground"
-                          }`}
+                            }`}
                         >
                           <Clock size={12} />
                           <span>{new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>

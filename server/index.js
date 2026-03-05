@@ -4,6 +4,8 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import apiRoutes from './routes/api.js';
 import { setupWebSockets } from './sockets.js';
 import { loadMemory } from './services/memoryService.js';
@@ -13,6 +15,9 @@ import { runMonthlyCleanup } from './services/cleanupService.js';
 import { checkPendingCommands } from './services/commandService.js';
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
@@ -37,27 +42,36 @@ await loadMemory();
 // Heartbeat for Proactive J every 15 minutes
 // Instead of fixed times, J wakes up every 15 mins and DECIDES if she should talk.
 cron.schedule('*/15 * * * *', () => {
-    console.log('[J Heartbeat] Checking if J wants to say something or think...');
-    checkProactiveNeeds(io);
+  console.log('[J Heartbeat] Checking if J wants to say something or think...');
+  checkProactiveNeeds(io);
 });
 
 // Check for specific time-based user reminders every minute (CRITICAL for reminders)
 cron.schedule('* * * * *', () => {
-    checkSpecificReminders(io);
+  checkSpecificReminders(io);
 });
 
 // Poll for commands from the J Notification Center (Phone) every 10 seconds
 setInterval(() => {
-    checkPendingCommands(io);
+  checkPendingCommands(io);
 }, 10000);
 
 // Monthly Cleanup on the 1st of every month at 3 AM
 cron.schedule('0 3 1 * *', () => {
-    runMonthlyCleanup();
+  runMonthlyCleanup();
 });
 
 // Routes
 app.use('/api', apiRoutes);
+
+// Serve frontend build in production
+const distPath = path.join(__dirname, '..', 'dist');
+app.use(express.static(distPath));
+
+// SPA fallback — serve index.html for any non-API route
+app.get('*', (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
 
 // Setup WebSockets
 setupWebSockets(io);

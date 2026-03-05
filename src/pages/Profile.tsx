@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { API_BASE } from "@/lib/config";
 import { motion, AnimatePresence } from "framer-motion";
 import { User, Mail, Calendar, Edit3, Save, X, Loader2, FileText, Trash2, Eye, Info, Archive } from "lucide-react";
 import { ChevronLeft } from "lucide-react";
@@ -38,7 +39,7 @@ const ProfilePage = () => {
 
   const fetchProfile = async () => {
     try {
-      const response = await fetch("http://localhost:3001/api/profile");
+      const response = await fetch(`${API_BASE}/api/profile`);
       const data = await response.json();
       setProfile(data);
       setEditForm(data);
@@ -52,7 +53,7 @@ const ProfilePage = () => {
 
   const fetchDocuments = async () => {
     try {
-      const response = await fetch("http://localhost:3001/api/docs");
+      const response = await fetch(`${API_BASE}/api/docs`);
       const data = await response.json();
       setDocuments(data);
     } catch (error) {
@@ -63,7 +64,7 @@ const ProfilePage = () => {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const response = await fetch("http://localhost:3001/api/profile", {
+      const response = await fetch(`${API_BASE}/api/profile`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editForm),
@@ -88,7 +89,7 @@ const ProfilePage = () => {
 
   const deleteDocument = async (id: string) => {
     try {
-      const response = await fetch(`http://localhost:3001/api/docs/${id}?archive=${isArchiveOn}`, {
+      const response = await fetch(`${API_BASE}/api/docs/${id}?archive=${isArchiveOn}`, {
         method: "DELETE",
       });
       const data = await response.json();
@@ -132,14 +133,14 @@ const ProfilePage = () => {
           <div className="w-20 h-20 rounded-2xl bg-primary/15 flex items-center justify-center">
             <User size={36} className="text-primary" />
           </div>
-          
+
           {isEditing ? (
             <div className="w-full space-y-3">
               <div className="space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground ml-1">Full Name</label>
-                <input 
+                <input
                   value={editForm.name}
-                  onChange={(e) => setEditForm({...editForm, name: e.target.value})}
+                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
                   className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                   placeholder="Your Name"
                 />
@@ -189,7 +190,7 @@ const ProfilePage = () => {
           className="glass-surface rounded-2xl p-5 space-y-4"
         >
           <h4 className="text-sm font-semibold text-foreground">Account Details</h4>
-          
+
           <div className="flex items-center gap-3 py-2">
             <div className="w-8 h-8 rounded-lg bg-secondary flex items-center justify-center">
               <Mail size={14} className="text-muted-foreground" />
@@ -197,9 +198,9 @@ const ProfilePage = () => {
             <div className="flex-1">
               <p className="text-xs text-muted-foreground">Email Notification Address</p>
               {isEditing ? (
-                <input 
+                <input
                   value={editForm.email}
-                  onChange={(e) => setEditForm({...editForm, email: e.target.value})}
+                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
                   className="w-full mt-1 bg-secondary/50 border border-border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                   placeholder="your-email@example.com"
                 />
@@ -267,8 +268,8 @@ const ProfilePage = () => {
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary/50">
                 <Archive size={12} className={isArchiveOn ? "text-primary" : "text-muted-foreground"} />
                 <span className="text-[10px] font-medium text-foreground uppercase tracking-tight">Archive Logic</span>
-                <Switch 
-                  checked={isArchiveOn} 
+                <Switch
+                  checked={isArchiveOn}
                   onCheckedChange={setIsArchiveOn}
                   className="scale-75"
                 />
@@ -312,7 +313,7 @@ const ProfilePage = () => {
                       </motion.button>
                     </div>
                   </div>
-                  
+
                   {/* Summary Preview (Collapsible) */}
                   <AnimatePresence>
                     {selectedDoc?.id === doc.id && (
@@ -326,7 +327,7 @@ const ProfilePage = () => {
                           <p className="text-[11px] leading-relaxed text-muted-foreground italic">
                             "{doc.summary}"
                           </p>
-                          <motion.button 
+                          <motion.button
                             onClick={() => setSelectedDoc(null)}
                             className="mt-2 text-[10px] text-primary font-medium"
                           >

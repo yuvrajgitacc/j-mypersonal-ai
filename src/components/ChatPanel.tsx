@@ -6,6 +6,7 @@ import AIorb from "./AIorb";
 import type { OrbState } from "./AIorb";
 import { io, Socket } from "socket.io-client";
 import { toast } from "sonner";
+import { API_BASE, SOCKET_URL } from "@/lib/config";
 
 const ChatPanel = () => {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
@@ -20,7 +21,7 @@ const ChatPanel = () => {
 
   const fetchTodayHistory = async () => {
     try {
-      const res = await fetch("http://localhost:3001/api/memory");
+      const res = await fetch(`${API_BASE}/api/memory`);
       const data = await res.json();
       if (data.history && data.history.length > 0) {
         setMessages(data.history.map((m: any, i: number) => ({
@@ -43,21 +44,21 @@ const ChatPanel = () => {
     // 2. Listen for refresh signals from Sidebar
     const handleRefresh = () => fetchTodayHistory();
     const handleArchiveLoad = (e: any) => {
-        const { date, history } = e.detail;
-        setMessages(history.map((m: any, i: number) => ({
-            id: `arch_${i}_${m.timestamp}`,
-            // Fix: Map "assistant" from DB to "ai" for the UI
-            role: m.role === "assistant" ? "ai" : "user",
-            content: m.content,
-            timestamp: new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        })));
-        toast.info(`Viewing archive for ${date}`);
+      const { date, history } = e.detail;
+      setMessages(history.map((m: any, i: number) => ({
+        id: `arch_${i}_${m.timestamp}`,
+        // Fix: Map "assistant" from DB to "ai" for the UI
+        role: m.role === "assistant" ? "ai" : "user",
+        content: m.content,
+        timestamp: new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      })));
+      toast.info(`Viewing archive for ${date}`);
     };
 
     window.addEventListener("refreshChat", handleRefresh);
     window.addEventListener("loadArchive", handleArchiveLoad);
 
-    const newSocket = io("http://localhost:3001");
+    const newSocket = io(SOCKET_URL);
     setSocket(newSocket);
 
     newSocket.on("chat_stream", (data) => {
@@ -96,7 +97,7 @@ const ChatPanel = () => {
         // Prevent duplicate initial greetings if they already exist in history
         const lastMsg = prev[prev.length - 1];
         if (lastMsg && lastMsg.content === data.content) return prev;
-        
+
         return [
           ...prev,
           {
@@ -148,7 +149,7 @@ const ChatPanel = () => {
     setInput("");
     setOrbState("thinking");
     setCurrentAiResponse("");
-    
+
     socket.emit("chat_message", { message: userMsg.content });
   };
 
@@ -177,7 +178,7 @@ const ChatPanel = () => {
     formData.append("document", file);
 
     try {
-      const response = await fetch("http://localhost:3001/api/upload-pdf", {
+      const response = await fetch(`${API_BASE}/api/upload-pdf`, {
         method: "POST",
         body: formData,
       });
@@ -185,7 +186,7 @@ const ChatPanel = () => {
       const data = await response.json();
       if (data.success) {
         toast.success(`Parsed ${file.name} successfully!`);
-        
+
         const aiMsg: ChatMessageData = {
           id: Date.now().toString(),
           role: "ai",
@@ -221,14 +222,14 @@ const ChatPanel = () => {
             <ChatMessage key={msg.id} message={msg} />
           ))}
           {currentAiResponse && (
-            <ChatMessage 
-              key="streaming" 
+            <ChatMessage
+              key="streaming"
               message={{
                 id: "streaming",
                 role: "ai",
                 content: currentAiResponse,
                 timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-              }} 
+              }}
             />
           )}
         </AnimatePresence>
@@ -243,7 +244,7 @@ const ChatPanel = () => {
             accept=".pdf"
             className="hidden"
           />
-          
+
           <div className="flex items-center gap-2">
             <motion.button
               whileTap={{ scale: 0.9 }}
@@ -257,11 +258,10 @@ const ChatPanel = () => {
             <motion.button
               whileTap={{ scale: 0.9 }}
               onClick={toggleRecording}
-              className={`p-2.5 rounded-xl transition-colors ${
-                isRecording
+              className={`p-2.5 rounded-xl transition-colors ${isRecording
                   ? "bg-destructive/20 text-destructive"
                   : "bg-secondary text-muted-foreground hover:text-foreground"
-              }`}
+                }`}
             >
               {isRecording ? <MicOff size={18} /> : <Mic size={18} />}
             </motion.button>
