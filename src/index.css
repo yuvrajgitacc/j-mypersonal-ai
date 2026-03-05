@@ -1,0 +1,148 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@layer base {
+  :root {
+    --background: 220 20% 6%;
+    --foreground: 220 10% 92%;
+
+    --card: 220 18% 10%;
+    --card-foreground: 220 10% 92%;
+
+    --popover: 220 18% 10%;
+    --popover-foreground: 220 10% 92%;
+
+    --primary: 210 100% 60%;
+    --primary-foreground: 220 20% 6%;
+
+    --secondary: 220 15% 16%;
+    --secondary-foreground: 220 10% 85%;
+
+    --muted: 220 15% 14%;
+    --muted-foreground: 220 10% 55%;
+
+    --accent: 270 80% 65%;
+    --accent-foreground: 220 10% 95%;
+
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 15% 18%;
+    --input: 220 15% 16%;
+    --ring: 210 100% 60%;
+
+    --radius: 0.75rem;
+
+    --sidebar-background: 220 20% 8%;
+    --sidebar-foreground: 220 10% 75%;
+    --sidebar-primary: 210 100% 60%;
+    --sidebar-primary-foreground: 220 20% 6%;
+    --sidebar-accent: 220 15% 14%;
+    --sidebar-accent-foreground: 220 10% 92%;
+    --sidebar-border: 220 15% 14%;
+    --sidebar-ring: 210 100% 60%;
+
+    /* Custom tokens */
+    --neon-blue: 210 100% 60%;
+    --neon-purple: 270 80% 65%;
+    --neon-cyan: 185 100% 55%;
+    --neon-orange: 25 95% 60%;
+    --glass: 220 20% 12%;
+    --glass-border: 220 15% 22%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+  }
+}
+
+@layer utilities {
+  .glass-surface {
+    @apply bg-card/60 backdrop-blur-xl border border-glass-border/30;
+  }
+
+  .glass-surface-strong {
+    @apply bg-card/80 backdrop-blur-2xl border border-glass-border/40;
+  }
+
+  .neon-glow-blue {
+    box-shadow: 0 0 20px hsl(210 100% 60% / 0.3), 0 0 60px hsl(210 100% 60% / 0.1);
+  }
+
+  .neon-glow-purple {
+    box-shadow: 0 0 20px hsl(270 80% 65% / 0.3), 0 0 60px hsl(270 80% 65% / 0.1);
+  }
+
+  .neon-glow-cyan {
+    box-shadow: 0 0 20px hsl(185 100% 55% / 0.3), 0 0 60px hsl(185 100% 55% / 0.1);
+  }
+
+  .neon-glow-orange {
+    box-shadow: 0 0 20px hsl(25 95% 60% / 0.3), 0 0 60px hsl(25 95% 60% / 0.1);
+  }
+
+  .text-gradient-brand {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, hsl(210 100% 60%), hsl(270 80% 65%), hsl(185 100% 55%));
+  }
+
+  /* Custom Scrollbar UI */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-muted/40 rounded-full transition-colors;
+    backdrop-filter: blur(4px);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground/30;
+  }
+
+  /* Firefox support */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted) / 0.4) transparent;
+  }
+}
+
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+@keyframes orb-rotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes float-particle {
+  0%, 100% { transform: translateY(0) scale(1); opacity: 0.6; }
+  50% { transform: translateY(-12px) scale(1.2); opacity: 1; }
+}
+
+@keyframes voice-wave {
+  0%, 100% { height: 4px; }
+  50% { height: 24px; }
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.6; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
