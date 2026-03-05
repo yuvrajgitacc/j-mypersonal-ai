@@ -319,20 +319,24 @@ ${secretThoughts}
       }
 
       // --- INTELLIGENT REMINDER EXTRACTION ---
-      const userAsked = lowerMsg.includes("remind") || lowerMsg.includes("remember") || lowerMsg.includes("notification") || lowerMsg.includes("notify");
-      const aiPromised = lowerResponse.includes("remind") || lowerResponse.includes("notification") || lowerResponse.includes("seconds") || lowerResponse.includes("minutes") || lowerResponse.includes("hours");
-
-      if (userAsked || aiPromised) {
+      const futureIntent = lowerMsg.includes("remind me to") || lowerMsg.includes("in ") || lowerMsg.includes("at ") || lowerMsg.includes("tomorrow") || lowerResponse.includes("i will notify") || lowerResponse.includes("i'll remind");
+      
+      if (futureIntent) {
         try {
-            console.log("DEBUG: Possible reminder detected. Extracting...");
+            console.log("DEBUG: Future reminder intent detected. Extracting...");
             const timeExtraction = await client.chat.completions.create({
                 messages: [
                     { 
                         role: 'system', 
-                        content: `You are a time-extraction engine. 
-                        Task: Extract the specific event and the intended time/delay from the conversation.
+                        content: `You are a precision time-extraction engine. 
                         Current Time: ${currentTime}
-                        Return JSON: {"event": "string", "time": "ISO_TIMESTAMP", "confidence": 0-1}.` 
+                        
+                        Task: Extract the event and the INTENDED FUTURE time.
+                        Rules:
+                        1. If the user or J mentions a specific delay (e.g., "in 5 minutes") or time ("tomorrow at 10 AM"), calculate the exact ISO timestamp.
+                        2. If NO SPECIFIC future time or delay is mentioned, return {"event": null, "time": null}.
+                        3. Do NOT extract reminders for past events or current status updates.
+                        4. Return JSON: {"event": "string", "time": "ISO_TIMESTAMP", "confidence": 0-1}.` 
                     },
                     { role: 'user', content: `User said: "${userMessage}"\nJ responded: "${fullResponse}"` }
                 ],
@@ -342,17 +346,25 @@ ${secretThoughts}
             });
 
             const reminderData = JSON.parse(timeExtraction.choices[0].message.content);
-            if (reminderData.time && reminderData.event && reminderData.confidence > 0.6) {
-                console.log(`✅ Automated Reminder Saved: ${reminderData.event} at ${reminderData.time}`);
-                await saveReminder(reminderData.event, reminderData.time);
-                if (onReminderSaved) onReminderSaved(reminderData);
-            } else if (userAsked && !aiPromised) {
-                await saveNote(userMessage);
+            if (reminderData.time && reminderData.event && reminderData.confidence > 0.8) {
+                const rTime = new Date(reminderData.time);
+                const now = new Date();
+                
+                // Only save if it's at least 30 seconds into the future to avoid loops
+                if (rTime.getTime() > now.getTime() + 30000) {
+                    console.log(`✅ Automated Reminder Saved: ${reminderData.event} at ${reminderData.time}`);
+                    await saveReminder(reminderData.event, reminderData.time);
+                    if (onReminderSaved) onReminderSaved(reminderData);
+                }
             }
         } catch (e) {
             console.error("Reminder extraction failed:", e);
-            if (userAsked) await saveNote(userMessage);
         }
+      }
+
+      // Fallback for simple "remember this" (No time mentioned)
+      if (lowerMsg.includes("remember") && !futureIntent) {
+          await saveNote(userMessage);
       }
 
       return fullResponse;
