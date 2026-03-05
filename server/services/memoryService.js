@@ -1,9 +1,14 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs-extra';
+import { fileURLToPath } from 'url';
 
-const dbPath = path.resolve(process.cwd(), '..', 'data', 'secretary.db');
-const jsonPath = path.resolve(process.cwd(), '..', 'data', 'memory.json');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// The db should be in a data folder in the project root
+const dbPath = path.resolve(__dirname, '..', '..', 'data', 'secretary.db');
+const jsonPath = path.resolve(__dirname, '..', '..', 'data', 'memory.json');
 
 // Ensure data directory exists
 fs.ensureDirSync(path.dirname(dbPath));
@@ -92,7 +97,7 @@ export const loadMemory = async () => {
         console.log("Migrating existing JSON data to SQLite...");
         try {
             const data = fs.readJsonSync(jsonPath);
-            
+
             // Migrate Profile
             if (data.profile) {
                 const stmt = db.prepare('INSERT OR REPLACE INTO profile (key, value) VALUES (?, ?)');
@@ -148,20 +153,20 @@ export const saveMemory = async (data) => {
 export const getTodayHistory = () => {
     const today = new Date().toISOString().split('T')[0];
     return db.prepare("SELECT role, content, timestamp FROM chat_history WHERE timestamp LIKE ? ORDER BY id ASC")
-             .all(`${today}%`);
+        .all(`${today}%`);
 };
 
 export const getArchiveDates = () => {
     // Get unique dates from chat history (excluding today)
     const today = new Date().toISOString().split('T')[0];
     const rows = db.prepare("SELECT DISTINCT strftime('%Y-%m-%d', timestamp) as date FROM chat_history WHERE timestamp NOT LIKE ? ORDER BY date DESC LIMIT 30")
-                  .all(`${today}%`);
+        .all(`${today}%`);
     return rows.map(r => r.date);
 };
 
 export const getHistoryByDate = (date) => {
     return db.prepare("SELECT role, content, timestamp FROM chat_history WHERE timestamp LIKE ? ORDER BY id ASC")
-             .all(`${date}%`);
+        .all(`${date}%`);
 };
 
 export const getRelationshipStats = () => {
@@ -231,7 +236,7 @@ export const deleteMemory = async (category, id) => {
         todo: 'todo',
         pdfExtractions: 'pdf_extractions'
     };
-    
+
     const table = tableMap[category];
     if (table) {
         db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id);
@@ -243,7 +248,7 @@ export const deleteMemory = async (category, id) => {
 export const searchMemory = (query) => {
     const results = [];
     const q = `%${query}%`;
-    
+
     const noteMatches = db.prepare('SELECT * FROM notes WHERE text LIKE ?').all(q);
     noteMatches.forEach(m => results.push({ category: 'notes', match: m.text }));
 
@@ -256,8 +261,8 @@ export const searchMemory = (query) => {
 export const appendToHistory = async (role, content) => {
     const timestamp = new Date().toISOString();
     db.prepare('INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)')
-      .run(role, content, timestamp);
-    
+        .run(role, content, timestamp);
+
     // Auto-cleanup: keep only last 100 messages
     db.prepare('DELETE FROM chat_history WHERE id IN (SELECT id FROM chat_history ORDER BY id DESC LIMIT -1 OFFSET 100)').run();
 };
@@ -287,7 +292,7 @@ export const archiveDocKnowledge = (docId) => {
         const timestamp = new Date().toISOString();
         const distilledFact = `Summary of deleted file (${doc.filename}): ${doc.summary}`;
         db.prepare('INSERT INTO long_term_facts (id, fact, category, importance, timestamp) VALUES (?, ?, ?, ?, ?)')
-          .run(id, distilledFact, 'archived_docs', 2, timestamp);
+            .run(id, distilledFact, 'archived_docs', 2, timestamp);
         return true;
     }
     return false;
@@ -295,16 +300,16 @@ export const archiveDocKnowledge = (docId) => {
 
 export const savePDFRecord = (record) => {
     db.prepare('INSERT INTO pdf_extractions (id, filename, summary, entities, action_items, upload_date) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(record.id, record.filename, record.summary, JSON.stringify(record.entities), JSON.stringify(record.actionItems), record.uploadDate);
+        .run(record.id, record.filename, record.summary, JSON.stringify(record.entities), JSON.stringify(record.actionItems), record.uploadDate);
 };
 
 export const getAssociativeContext = () => {
     // Get last 30 chat messages (more than the usual 10)
     const recentHistory = db.prepare('SELECT role, content FROM chat_history ORDER BY id DESC LIMIT 30').all().reverse();
-    
+
     // Get all long-term facts
     const longTermFacts = db.prepare('SELECT fact, category FROM long_term_facts ORDER BY timestamp DESC LIMIT 20').all();
-    
+
     // Get a summary of documents
     const docSummaries = db.prepare('SELECT filename, summary FROM pdf_extractions ORDER BY upload_date DESC LIMIT 10').all();
 
@@ -323,7 +328,7 @@ export const saveLongTermFact = (fact, category = 'general', importance = 1) => 
     const id = `fact_${Date.now()}`;
     const timestamp = new Date().toISOString();
     db.prepare('INSERT INTO long_term_facts (id, fact, category, importance, timestamp) VALUES (?, ?, ?, ?, ?)')
-      .run(id, fact, category, importance, timestamp);
+        .run(id, fact, category, importance, timestamp);
     return id;
 };
 
@@ -348,7 +353,7 @@ export const markThoughtAsShared = (id) => {
 export const saveJournalEntry = (date, content, moodTone, learnedFacts) => {
     const timestamp = new Date().toISOString();
     db.prepare('INSERT OR REPLACE INTO j_private_journal (date, content, mood_tone, learned_facts, timestamp) VALUES (?, ?, ?, ?, ?)')
-      .run(date, content, moodTone, JSON.stringify(learnedFacts), timestamp);
+        .run(date, content, moodTone, JSON.stringify(learnedFacts), timestamp);
 };
 
 export const getRecentJournals = (limit = 3) => {
