@@ -10,7 +10,7 @@ import apiRoutes from './routes/api.js';
 import { setupWebSockets } from './sockets.js';
 import { loadMemory } from './services/memoryService.js';
 import { checkAndSendReminders, checkSpecificReminders } from './services/emailService.js';
-import { checkProactiveNeeds, triggerEveningReflection } from './services/proactiveService.js';
+import { checkProactiveNeeds } from './services/proactiveService.js';
 import { runMonthlyCleanup } from './services/cleanupService.js';
 import { checkPendingCommands } from './services/commandService.js';
 
