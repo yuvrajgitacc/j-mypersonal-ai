@@ -13,7 +13,7 @@ const jsonPath = path.resolve(__dirname, '..', '..', 'data', 'memory.json');
 // Ensure data directory exists
 fs.ensureDirSync(path.dirname(dbPath));
 
-const db = new Database(dbPath);
+export const db = new Database(dbPath);
 
 // --- 1. Database Initialization (Tables) ---
 db.exec(`

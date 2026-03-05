@@ -1,10 +1,6 @@
 import Groq from 'groq-sdk';
-import { saveLongTermFact } from './memoryService.js';
-import Database from 'better-sqlite3';
+import { db, saveLongTermFact } from './memoryService.js';
 import path from 'path';
-
-const dbPath = path.resolve('data', 'secretary.db');
-const db = new Database(dbPath);
 
 import dotenv from 'dotenv';
 dotenv.config();

@@ -1,12 +1,23 @@
 import express from 'express';
 import multer from 'multer';
+import path from 'path';
+import fs from 'fs-extra';
+import { fileURLToPath } from 'url';
 import { processPDF } from '../services/pdfService.js';
 import { getMemoryCache, saveMemory, deleteMemory, searchMemory, saveLongTermFact, saveNote, appendToHistory } from '../services/memoryService.js';
 import { sendEmailNotification } from '../services/emailService.js';
 import { checkProactiveNeeds } from '../services/proactiveService.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const router = express.Router();
-const upload = multer({ dest: 'uploads/' });
+
+// Ensure uploads directory exists
+const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+fs.ensureDirSync(uploadsDir);
+
+const upload = multer({ dest: uploadsDir });
 
 // --- Profile Endpoints ---
 router.get('/profile', (req, res) => {
