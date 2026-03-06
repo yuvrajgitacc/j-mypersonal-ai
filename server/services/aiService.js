@@ -30,24 +30,27 @@ const getClient = () => clients[currentClientIndex];
  */
 export const getInternalThoughtsContext = async (userMessage) => {
     const lowerMsg = userMessage.toLowerCase();
-    const wantsThoughts = lowerMsg.includes("thought") || lowerMsg.includes("thinking") || lowerMsg.includes("diary") || lowerMsg.includes("monologue") || lowerMsg.includes("soch");
     
-    if (wantsThoughts) {
-        const thoughts = await getUnspokenThoughts(2);
-        const journals = await getRecentJournals(1);
-        
-        let context = "\n[J'S SECRET KNOWLEDGE (Share only if relevant)]\n";
-        if (thoughts.length > 0) {
-            context += `Recent Unspoken Thoughts: ${JSON.stringify(thoughts)}\n`;
-            // Mark the first one as potentially shared so J doesn't repeat it
-            await markThoughtAsShared(thoughts[0].id);
-        }
-        if (journals.length > 0) {
-            context += `Last Private Journal Excerpt: ${journals[0].content.substring(0, 300)}...\n`;
-        }
-        return context;
+    // Always fetch last 3 thoughts for "working memory"
+    const thoughts = await getUnspokenThoughts(3);
+    const journals = await getRecentJournals(1);
+    
+    let context = "\n[J'S RECENT WORKING MEMORY (INTERNAL MONOLOGUES)]\n";
+    if (thoughts.length > 0) {
+        thoughts.forEach((t, i) => {
+            context += `Thought ${i + 1} (${t.timestamp}): ${t.thought}\n`;
+        });
+    } else {
+        context += "No recent internal monologues recorded.\n";
     }
-    return "";
+
+    // Still check if the user specifically asked for her "feelings" or "diary"
+    const wantsThoughts = lowerMsg.includes("thought") || lowerMsg.includes("thinking") || lowerMsg.includes("diary") || lowerMsg.includes("monologue") || lowerMsg.includes("soch");
+    if (wantsThoughts && journals.length > 0) {
+        context += `\n[J'S SECRET DIARY (SHARE ONLY IF RELEVANT)]\nLast Private Journal Excerpt: ${journals[0].content.substring(0, 400)}...\n`;
+    }
+    
+    return context;
 };
 
 /**
@@ -181,10 +184,10 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
   // 1. Context Retrieval
   const relevantContext = await getRelevantContext(userMessage, fullMemory);
 
-  // 2. Associative Memory Linking (NEW)
+  // 2. Associative Memory Linking
   const associativeLink = await findAssociativeLinks(userMessage);
 
-  // 3. Link Research / YouTube Summarization (NEW)
+  // 3. Link Research / YouTube Summarization
   let researchData = "";
   const linkInfo = await processLinkForResearch(userMessage);
   if (linkInfo && linkInfo.content) {
@@ -203,7 +206,7 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
       webContext = await performWebSearch(searchDecision.query);
   }
 
-  // 6. Secret Thoughts & Diary Check (NEW)
+  // 6. Secret Thoughts & Diary Check
   const secretThoughts = await getInternalThoughtsContext(userMessage);
 
   const memoryContext = `
@@ -227,8 +230,29 @@ ${secretThoughts}
   });
 
   const messages = [
-    { role: 'system', content: `${systemPrompt}\n\n[REAL-TIME CONTEXT]\nCurrent Time: ${currentTime}\nDETECTED USER MOOD: ${currentMood}\n\n${memoryContext}` },
-    ...recentHistory.map(m => ({ role: m.role, content: m.content }))
+    { 
+        role: 'system', 
+        content: `${systemPrompt}
+
+[SYSTEM 2 THINKING PROTOCOL]
+You MUST process this request in two stages:
+1. INTERNAL_MONOLOGUE: Silently analyze the user's message. Cross-reference the [User Memory Context]. Check for dates, facts, and logic errors. Correct yourself if you were about to hallucinate.
+2. FINAL_RESPONSE: The warm, caring, and professional response you send to Yuvraj.
+
+Return JSON format:
+{
+    "internal_monologue": "Detailed step-by-step reasoning and fact-checking",
+    "final_response": "The actual message for Boss/Yuvraj"
+}
+
+[REAL-TIME CONTEXT]
+Current Time: ${currentTime}
+DETECTED USER MOOD: ${currentMood}
+
+${memoryContext}` 
+    },
+    ...recentHistory.map(m => ({ role: m.role, content: m.content })),
+    { role: 'user', content: userMessage }
   ];
 
   let attempt = 0;
@@ -236,20 +260,32 @@ ${secretThoughts}
   while (attempt < 2) {
     try {
       const client = getClient();
-      const stream = await client.chat.completions.create({
+      console.log("[J Brain] Thinking...");
+      
+      const completion = await client.chat.completions.create({
         messages,
         model: 'llama-3.3-70b-versatile',
+        response_format: { type: "json_object" },
         temperature: 0.7,
-        stream: true,
       });
 
-      let fullResponse = '';
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || '';
-        fullResponse += content;
-        if (onChunk && content) {
-          onChunk(content);
-        }
+      const result = JSON.parse(completion.choices[0].message.content);
+      const internalThought = result.internal_monologue;
+      const fullResponse = result.final_response;
+
+      console.log(`[J Thought]: ${internalThought.substring(0, 100)}...`);
+
+      // 1. Save the hidden thought to the internal monologue table
+      await saveInternalThought(internalThought, "scratchpad");
+
+      // 2. Stream the response chunk by chunk to maintain the "AI feel"
+      if (onChunk) {
+          // We simulate streaming since we got the full JSON at once for accuracy
+          const chunks = fullResponse.split(' ');
+          for (const chunk of chunks) {
+              onChunk(chunk + ' ');
+              await new Promise(resolve => setTimeout(resolve, 30)); // Natural typing speed
+          }
       }
       
       const lowerMsg = userMessage.toLowerCase();
@@ -258,28 +294,19 @@ ${secretThoughts}
       await appendToHistory('user', userMessage);
       await appendToHistory('assistant', fullResponse);
 
+      // --- Automated Background Tasks (Reminders, Facts, etc.) ---
+      
       // NEW: Manual Journaling Trigger Detection
       const userAskedToJournal = lowerMsg.includes("write your diary") || lowerMsg.includes("diary likh lo") || lowerMsg.includes("reflect on the day") || lowerMsg.includes("journaling shuru karo");
       if (userAskedToJournal) {
-          console.log("DEBUG: User manually triggered journaling.");
           await manualTriggerJournaling();
       }
 
-      // NEW: Send EXISTING journal via Email upon request
-      const userAskedToEmailDiary = (lowerMsg.includes("email") || lowerMsg.includes("mail")) && (lowerMsg.includes("diary") || lowerMsg.includes("journal"));
-      if (userAskedToEmailDiary) {
-          const journals = await getRecentJournals(1);
-          if (journals.length > 0) {
-              console.log("DEBUG: User requested existing journal via email.");
-              await sendJournalEmail(journals[0].date, journals[0].content, journals[0].mood_tone);
-          }
-      }
-
-      // NEW: Distill new long-term facts after conversation
-      if (fullResponse.length > 100) {
+      // Distill new long-term facts
+      if (fullResponse.length > 50) {
           const factDistiller = await client.chat.completions.create({
               messages: [
-                  { role: 'system', content: 'Extract any new important facts or topics from this exchange for long-term memory. Return JSON: {"fact": "string", "category": "string"} or {"fact": null} if nothing important.' },
+                  { role: 'system', content: 'Extract any new important facts from this exchange for long-term memory. Return JSON: {"fact": "string", "category": "string"} or {"fact": null}.' },
                   { role: 'user', content: `User: ${userMessage}\nJ: ${fullResponse}` }
               ],
               model: 'llama-3.1-8b-instant',
@@ -292,92 +319,41 @@ ${secretThoughts}
           }
       }
 
-      const lowerResponse = fullResponse.toLowerCase();
-
-      // --- INTELLIGENT NOTIFICATION TRIGGER (Strictly AI Intent) ---
-      const aiWantsToNotify = fullResponse.includes("📱 J Notification Center");
-
-      if (aiWantsToNotify) {
-          console.log("DEBUG: AI explicitly requested a phone notification.");
+      // Notifications & Emails
+      if (fullResponse.includes("📱 J Notification Center")) {
           let notificationTitle = "A Message from J Secretary";
           const titleMatch = fullResponse.match(/📱 J Notification Center:\s*([^:\n]+):/);
-          if (titleMatch && titleMatch[1]) {
-              notificationTitle = titleMatch[1].trim();
-          }
+          if (titleMatch && titleMatch[1]) notificationTitle = titleMatch[1].trim();
           await sendNotificationToCenter(notificationTitle, fullResponse, "chat");
       }
 
-      // --- INTELLIGENT EMAIL TRIGGER (Strictly AI Intent) ---
-      const aiWantsToEmail = lowerResponse.includes("email sent") || lowerResponse.includes("sending an email");
-
-      if (aiWantsToEmail) {
-          console.log("DEBUG: Email trigger detected in AI response...");
-          const emailSubject = `Update from J Secretary: ${fullMemory.profile.name}`;
-          const emailHtml = `
-            <div style="font-family: sans-serif; padding: 30px; color: #333; max-width: 600px; border: 1px solid #eee; border-radius: 15px; margin: auto;">
-                <h2 style="color: #3b82f6;">Hi ${fullMemory.profile.name}! 👋</h2>
-                <div style="background: #f9fafb; padding: 20px; border-radius: 12px; margin: 20px 0; line-height: 1.6;">
-                    ${fullResponse.replace(/\n/g, '<br>')}
-                </div>
-                <p style="font-weight: bold; color: #3b82f6;">— J (Your AI Companion)</p>
-            </div>
-          `;
-          await sendEmailNotification(emailSubject, fullResponse, emailHtml);
-      }
-
-      // --- INTELLIGENT REMINDER EXTRACTION ---
-      const futureIntent = lowerMsg.includes("remind me to") || lowerMsg.includes("in ") || lowerMsg.includes("at ") || lowerMsg.includes("tomorrow") || lowerResponse.includes("i will notify") || lowerResponse.includes("i'll remind");
-      
+      // Reminder Extraction
+      const futureIntent = lowerMsg.includes("remind me to") || lowerMsg.includes("in ") || lowerMsg.includes("at ") || lowerMsg.includes("tomorrow");
       if (futureIntent) {
         try {
-            console.log("DEBUG: Future reminder intent detected. Extracting...");
             const timeExtraction = await client.chat.completions.create({
                 messages: [
                     { 
                         role: 'system', 
-                        content: `You are a precision time-extraction engine. 
-                        Current Time: ${currentTime}
-                        
-                        Task: Extract the event and the INTENDED FUTURE time.
-                        Rules:
-                        1. If the user or J mentions a specific delay (e.g., "in 5 minutes") or time ("tomorrow at 10 AM"), calculate the exact ISO timestamp.
-                        2. If NO SPECIFIC future time or delay is mentioned, return {"event": null, "time": null}.
-                        3. Do NOT extract reminders for past events or current status updates.
-                        4. Return JSON: {"event": "string", "time": "ISO_TIMESTAMP", "confidence": 0-1}.` 
+                        content: `Extract future reminder time. Current: ${currentTime}. Return JSON: {"event": "str", "time": "ISO", "confidence": 0-1}` 
                     },
-                    { role: 'user', content: `User said: "${userMessage}"\nJ responded: "${fullResponse}"` }
+                    { role: 'user', content: `User: ${userMessage}\nJ: ${fullResponse}` }
                 ],
                 model: 'llama-3.1-8b-instant',
-                response_format: { type: "json_object" },
-                temperature: 0.1
+                response_format: { type: "json_object" }
             });
-
             const reminderData = JSON.parse(timeExtraction.choices[0].message.content);
-            if (reminderData.time && reminderData.event && reminderData.confidence > 0.8) {
-                const rTime = new Date(reminderData.time);
-                const now = new Date();
-                
-                // Only save if it's at least 30 seconds into the future to avoid loops
-                if (rTime.getTime() > now.getTime() + 30000) {
-                    console.log(`✅ Automated Reminder Saved: ${reminderData.event} at ${reminderData.time}`);
-                    await saveReminder(reminderData.event, reminderData.time);
-                    if (onReminderSaved) onReminderSaved(reminderData);
-                }
+            if (reminderData.time && reminderData.confidence > 0.8) {
+                await saveReminder(reminderData.event, reminderData.time);
+                if (onReminderSaved) onReminderSaved(reminderData);
             }
-        } catch (e) {
-            console.error("Reminder extraction failed:", e);
-        }
-      }
-
-      // Fallback for simple "remember this" (No time mentioned)
-      if (lowerMsg.includes("remember") && !futureIntent) {
-          await saveNote(userMessage);
+        } catch (e) {}
       }
 
       return fullResponse;
     } catch (error) {
       console.error(`Error with Groq API Key ${currentClientIndex + 1}:`, error.message);
-      if (error.status === 429 || error.status >= 500 || error.message.includes('rate limit')) {
+      if (error.status === 429 || error.status >= 500) {
         currentClientIndex = currentClientIndex === 0 ? 1 : 0;
         attempt++;
       } else {
