@@ -153,7 +153,14 @@ export const getRelevantContext = async (userMessage, memory) => {
 
         const { docIds, noteIds } = JSON.parse(selection.choices[0].message.content);
         
-        const relevantDocs = memory.pdfExtractions.filter(d => (docIds || []).includes(d.id));
+        const relevantDocs = memory.pdfExtractions
+            .filter(d => (docIds || []).includes(d.id))
+            .map(d => ({
+                filename: d.filename,
+                summary: d.summary,
+                fullDetails: d.entities // This now contains the full date-mapped list
+            }));
+            
         const relevantNotes = (memory.notes || []).filter(n => (noteIds || []).includes(n.id));
 
         return {
@@ -386,15 +393,28 @@ export const extractPDFInfo = async (text) => {
         const client = getClient();
         const completion = await client.chat.completions.create({
             messages: [
-                { role: 'system', content: 'Extract key info as JSON: {"summary": "string", "entities": [], "actionItems" : []}.' },
-                { role: 'user', content: text.substring(0, 15000) }
+                { 
+                    role: 'system', 
+                    content: `You are a high-level Document Specialist. 
+                    Your task is to analyze raw text extracted from a PDF (likely a table or calendar). 
+                    
+                    INSTRUCTIONS:
+                    1. Identify the TYPE of document (e.g., Academic Calendar, Invoice, Report).
+                    2. If it is a CALENDAR, map out columns (Months) and rows (Dates). 
+                    3. Extract events with their FULL dates (e.g., "March 30: Test-1 (DM)"). 
+                    4. Check for logic: Are the dates in order? Is there a pattern? 
+                    
+                    Return JSON: {"summary": "A detailed spatial summary of the document", "entities": ["Full event list with dates"], "actionItems" : ["Important tasks/dates extracted"]}.` 
+                },
+                { role: 'user', content: text.substring(0, 30000) }
             ],
-            model: 'llama-3.1-8b-instant',
+            model: 'llama-3.3-70b-versatile',
             response_format: { type: "json_object" },
-            temperature: 0.2
+            temperature: 0.1
         });
         return JSON.parse(completion.choices[0].message.content);
     } catch (err) {
+        console.error("PDF Extraction Error:", err);
         return { summary: "Failed to extract", entities: [], actionItems: [] };
     }
 };

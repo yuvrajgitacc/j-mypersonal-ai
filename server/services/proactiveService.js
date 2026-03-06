@@ -69,6 +69,12 @@ export const checkProactiveNeeds = async (io) => {
                 "message": "string (The message to send if any)",
                 "personalityTone": "string"
             }
+
+            CRITICAL RULES:
+            - If "Reminders" is empty, DO NOT mention any meetings or schedule in the "message".
+            - If "Notes" is empty, DO NOT mention any projects in the "message".
+            - If there is nothing REAL to report, choose "SILENCE".
+            - NEVER hallucinate a meeting at 11 AM or any other time.
         `;
 
         const completion = await groq.chat.completions.create({
@@ -188,9 +194,19 @@ export const generateInitialGreeting = async () => {
         if (lastMsg) {
             const diffInHours = (new Date().getTime() - new Date(lastMsg.timestamp).getTime()) / (1000 * 60 * 60);
             if (diffInHours < 1) return null;
+            
             const prompt = `
                 ${systemPrompt}
-                Greet Boss after ${diffInHours.toFixed(1)} hours. Mention a note or a project briefly. Be warm.
+                Greet Boss after ${diffInHours.toFixed(1)} hours. 
+                
+                [SITUATION]
+                - Recent Notes: ${JSON.stringify(memory.notes.slice(0, 3))}
+                - Upcoming Reminders: ${JSON.stringify(memory.reminders.filter(r => !r.sent).slice(0, 2))}
+                
+                Task: Mention a note or a project briefly ONLY if they exist. 
+                If NO notes or reminders exist, just be warm and welcoming. 
+                NEVER make up a schedule or a meeting.
+                
                 Return JSON: {"greeting": "message"}
             `;
             const completion = await groq.chat.completions.create({
