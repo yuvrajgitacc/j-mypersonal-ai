@@ -1,4 +1,19 @@
-import { getMemoryCache, saveMemory, saveNote, saveReminder, logUserMood, getAssociativeContext, saveLongTermFact, getRelationshipStats, getUnspokenThoughts, getRecentJournals, markThoughtAsShared, appendToHistory } from './memoryService.js';
+import { 
+    getMemoryCache, 
+    saveMemory, 
+    saveNote, 
+    saveReminder, 
+    logUserMood, 
+    getAssociativeContext, 
+    saveLongTermFact, 
+    getRelationshipStats, 
+    getUnspokenThoughts, 
+    getRecentJournals, 
+    markThoughtAsShared, 
+    appendToHistory,
+    saveInternalThought,
+    getIdeaGraph // Added getIdeaGraph
+} from './memoryService.js';
 import { sendEmailNotification, sendNotificationToCenter, sendJournalEmail } from './emailService.js';
 import { performWebSearch } from './searchService.js';
 import { processLinkForResearch } from './researchService.js';
@@ -60,6 +75,7 @@ export const getInternalThoughtsContext = async (userMessage) => {
 export const findAssociativeLinks = async (userMessage) => {
     try {
         const context = await getAssociativeContext();
+        const ideaGraph = await getIdeaGraph(15);
         const client = getClient();
         
         const prompt = `
@@ -69,10 +85,11 @@ export const findAssociativeLinks = async (userMessage) => {
             Past History (Summarized): ${JSON.stringify(context.recentHistory.slice(-15))}
             Past Long-Term Facts: ${JSON.stringify(context.longTermFacts)}
             Recent Notes: ${JSON.stringify(context.recentNotes)}
+            Deep Memory (Idea Graph): ${JSON.stringify(ideaGraph)}
 
             Task: 
-            Identify if there is a meaningful link between the current message and ANY past event, note, or fact. 
-            If a link exists, describe it briefly (e.g., "User previously mentioned X which had a similar vibe to Y").
+            Identify if there is a meaningful link between the current message and ANY past event, note, or Idea Graph connection. 
+            If a link exists, describe it briefly (e.g., "User previously mentioned X which had a similar vibe to Y", or "I remember X is connected to Y because...").
             If NO meaningful link exists, return {"linkFound": false}.
             
             Return JSON: {"linkFound": true, "connection": "description of the link", "pastContext": "what was remembered"}.

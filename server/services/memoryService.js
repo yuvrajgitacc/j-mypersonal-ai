@@ -70,7 +70,8 @@ export const initDB = async () => {
         `CREATE TABLE IF NOT EXISTS long_term_facts (id TEXT PRIMARY KEY, fact TEXT, category TEXT, importance INTEGER DEFAULT 1, timestamp TEXT)`,
         `CREATE TABLE IF NOT EXISTS mood_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, score INTEGER, emotion TEXT, timestamp TEXT)`,
         `CREATE TABLE IF NOT EXISTS internal_monologue (id INTEGER PRIMARY KEY AUTOINCREMENT, thought TEXT, type TEXT, status TEXT DEFAULT 'unspoken', timestamp TEXT)`,
-        `CREATE TABLE IF NOT EXISTS j_private_journal (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE, content TEXT, mood_tone TEXT, learned_facts TEXT, timestamp TEXT)`
+        `CREATE TABLE IF NOT EXISTS j_private_journal (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE, content TEXT, mood_tone TEXT, learned_facts TEXT, timestamp TEXT)`,
+        `CREATE TABLE IF NOT EXISTS idea_graph (id INTEGER PRIMARY KEY AUTOINCREMENT, concept_a TEXT, concept_b TEXT, relationship TEXT, timestamp TEXT)`
     ];
 
     for (const sql of schema) {
@@ -87,6 +88,16 @@ export const initDB = async () => {
 export { db };
 
 // --- 3. Memory Service Functions (Updated for Async/Await) ---
+
+export const saveIdeaConnection = async (conceptA, conceptB, relationship) => {
+    const timestamp = new Date().toISOString();
+    await execSQL('INSERT INTO idea_graph (concept_a, concept_b, relationship, timestamp) VALUES (?, ?, ?, ?)', [conceptA, conceptB, relationship, timestamp]);
+};
+
+export const getIdeaGraph = async (limit = 20) => {
+    return await queryAll('SELECT * FROM idea_graph ORDER BY timestamp DESC LIMIT ?', [limit]);
+};
+
 
 export const loadMemory = async () => {
     await initDB();

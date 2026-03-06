@@ -13,6 +13,7 @@ import { checkAndSendReminders, checkSpecificReminders } from './services/emailS
 import { checkProactiveNeeds } from './services/proactiveService.js';
 import { runMonthlyCleanup } from './services/cleanupService.js';
 import { checkPendingCommands } from './services/commandService.js';
+import { processSleepCycle } from './services/sleepService.js';
 
 dotenv.config();
 
@@ -55,6 +56,11 @@ cron.schedule('* * * * *', () => {
 setInterval(() => {
   checkPendingCommands(io);
 }, 10000);
+
+// True Memory Synthesis (Idea Graph generation) at 3 AM every day
+cron.schedule('0 3 * * *', () => {
+  processSleepCycle();
+});
 
 // Monthly Cleanup on the 1st of every month at 3 AM
 cron.schedule('0 3 1 * *', () => {
