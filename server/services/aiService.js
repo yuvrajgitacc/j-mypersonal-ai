@@ -177,6 +177,52 @@ export const getRelevantContext = async (userMessage, memory) => {
     }
 };
 
+/**
+ * NEW: The Internal Critic (System 2 - Phase 2)
+ * Audits the draft response against the real data to catch hallucinations.
+ */
+export const performInternalReview = async (userMessage, context, draftResponse) => {
+    try {
+        const client = getClient();
+        const reviewPrompt = `
+            You are J's Internal Critic (The Logic Auditor). 
+            
+            [CONTEXT DATA PROVIDED TO J]
+            ${context}
+            
+            [USER'S MESSAGE]
+            "${userMessage}"
+            
+            [J'S DRAFT RESPONSE]
+            "${draftResponse}"
+            
+            TASK:
+            1. Compare J's draft against the [CONTEXT DATA].
+            2. Check for Hallucinations: Did J mention a meeting, date, or fact NOT in the context?
+            3. Check for Tone: Is she being professional and caring?
+            
+            Return JSON:
+            {
+                "status": "PASS" | "FAIL",
+                "critique": "Describe the error if any",
+                "fix_instructions": "Specific instructions for J to correct her draft"
+            }
+        `;
+
+        const completion = await client.chat.completions.create({
+            messages: [{ role: 'system', content: reviewPrompt }],
+            model: 'llama-3.1-8b-instant',
+            response_format: { type: "json_object" },
+            temperature: 0.1
+        });
+
+        return JSON.parse(completion.choices[0].message.content);
+    } catch (err) {
+        console.error("Internal Critic Error:", err);
+        return { status: "PASS", critique: "" }; // Fallback
+    }
+};
+
 export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) => {
   const fullMemory = await getMemoryCache();
   const relationshipStats = await getRelationshipStats();
@@ -236,13 +282,13 @@ ${secretThoughts}
 
 [SYSTEM 2 THINKING PROTOCOL]
 You MUST process this request in two stages:
-1. INTERNAL_MONOLOGUE: Silently analyze the user's message. Cross-reference the [User Memory Context]. Check for dates, facts, and logic errors. Correct yourself if you were about to hallucinate.
+1. INTERNAL_MONOLOGUE: Silently analyze the user's message. Cross-reference the [User Memory Context]. Check for dates, facts, and logic errors.
 2. FINAL_RESPONSE: The warm, caring, and professional response you send to Yuvraj.
 
 Return JSON format:
 {
-    "internal_monologue": "Detailed step-by-step reasoning and fact-checking",
-    "final_response": "The actual message for Boss/Yuvraj"
+    "internal_monologue": "Detailed step-by-step reasoning",
+    "final_response": "The actual message"
 }
 
 [REAL-TIME CONTEXT]
@@ -270,61 +316,83 @@ ${memoryContext}`
       });
 
       const result = JSON.parse(completion.choices[0].message.content);
-      const internalThought = result.internal_monologue;
-      const fullResponse = result.final_response;
+      let internalThought = result.internal_monologue;
+      let finalResponse = result.final_response;
+
+      // --- PHASE 2: INTERNAL CRITIC LOOP ---
+      console.log("[J Brain] Performing Internal Review...");
+      const review = await performInternalReview(userMessage, memoryContext, finalResponse);
+
+      if (review.status === "FAIL") {
+          console.log(`[J Critic Audit]: FAIL - ${review.critique}`);
+          await saveInternalThought(`CRITIC FAILED DRAFT: ${review.critique}`, "critic_alert");
+          
+          // Force a second attempt with the critique injected
+          const correctionPrompt = [
+              ...messages,
+              { role: 'assistant', content: JSON.stringify(result) },
+              { role: 'system', content: `CRITICAL ERROR DETECTED: ${review.critique}. Instruction: ${review.fix_instructions}. Rewrite your response now with 100% accuracy.` }
+          ];
+
+          const secondChance = await client.chat.completions.create({
+            messages: correctionPrompt,
+            model: 'llama-3.3-70b-versatile',
+            response_format: { type: "json_object" },
+            temperature: 0.3,
+          });
+
+          const fixedResult = JSON.parse(secondChance.choices[0].message.content);
+          internalThought = fixedResult.internal_monologue;
+          finalResponse = fixedResult.final_response;
+          console.log("[J Brain] Draft corrected successfully.");
+      } else {
+          console.log("[J Critic Audit]: PASS");
+      }
+
+      // --- END OF CRITIC LOOP ---
 
       console.log(`[J Thought]: ${internalThought.substring(0, 100)}...`);
 
-      // 1. Save the hidden thought to the internal monologue table
+      // Save thought & Stream response
       await saveInternalThought(internalThought, "scratchpad");
 
-      // 2. Stream the response chunk by chunk to maintain the "AI feel"
       if (onChunk) {
-          // We simulate streaming since we got the full JSON at once for accuracy
-          const chunks = fullResponse.split(' ');
+          const chunks = finalResponse.split(' ');
           for (const chunk of chunks) {
               onChunk(chunk + ' ');
-              await new Promise(resolve => setTimeout(resolve, 30)); // Natural typing speed
+              await new Promise(resolve => setTimeout(resolve, 30));
           }
       }
       
       const lowerMsg = userMessage.toLowerCase();
 
-      // Save interaction to history
+      // Save interaction
       await appendToHistory('user', userMessage);
-      await appendToHistory('assistant', fullResponse);
+      await appendToHistory('assistant', finalResponse);
 
-      // --- Automated Background Tasks (Reminders, Facts, etc.) ---
-      
-      // NEW: Manual Journaling Trigger Detection
+      // Automated Background Tasks
       const userAskedToJournal = lowerMsg.includes("write your diary") || lowerMsg.includes("diary likh lo") || lowerMsg.includes("reflect on the day") || lowerMsg.includes("journaling shuru karo");
-      if (userAskedToJournal) {
-          await manualTriggerJournaling();
-      }
+      if (userAskedToJournal) await manualTriggerJournaling();
 
-      // Distill new long-term facts
-      if (fullResponse.length > 50) {
+      if (finalResponse.length > 50) {
           const factDistiller = await client.chat.completions.create({
               messages: [
-                  { role: 'system', content: 'Extract any new important facts from this exchange for long-term memory. Return JSON: {"fact": "string", "category": "string"} or {"fact": null}.' },
-                  { role: 'user', content: `User: ${userMessage}\nJ: ${fullResponse}` }
+                  { role: 'system', content: 'Extract new facts. Return JSON: {"fact": "string", "category": "string"} or {"fact": null}.' },
+                  { role: 'user', content: `User: ${userMessage}\nJ: ${finalResponse}` }
               ],
               model: 'llama-3.1-8b-instant',
-              response_format: { type: "json_object" },
-              temperature: 0.1
+              response_format: { type: "json_object" }
           });
           const distilled = JSON.parse(factDistiller.choices[0].message.content);
-          if (distilled.fact) {
-              await saveLongTermFact(distilled.fact, distilled.category);
-          }
+          if (distilled.fact) await saveLongTermFact(distilled.fact, distilled.category);
       }
 
-      // Notifications & Emails
-      if (fullResponse.includes("📱 J Notification Center")) {
+      // Notifications
+      if (finalResponse.includes("📱 J Notification Center")) {
           let notificationTitle = "A Message from J Secretary";
-          const titleMatch = fullResponse.match(/📱 J Notification Center:\s*([^:\n]+):/);
+          const titleMatch = finalResponse.match(/📱 J Notification Center:\s*([^:\n]+):/);
           if (titleMatch && titleMatch[1]) notificationTitle = titleMatch[1].trim();
-          await sendNotificationToCenter(notificationTitle, fullResponse, "chat");
+          await sendNotificationToCenter(notificationTitle, finalResponse, "chat");
       }
 
       // Reminder Extraction
@@ -333,11 +401,8 @@ ${memoryContext}`
         try {
             const timeExtraction = await client.chat.completions.create({
                 messages: [
-                    { 
-                        role: 'system', 
-                        content: `Extract future reminder time. Current: ${currentTime}. Return JSON: {"event": "str", "time": "ISO", "confidence": 0-1}` 
-                    },
-                    { role: 'user', content: `User: ${userMessage}\nJ: ${fullResponse}` }
+                    { role: 'system', content: `Extract time. Current: ${currentTime}. Return JSON: {"event": "str", "time": "ISO", "confidence": 0-1}` },
+                    { role: 'user', content: `User: ${userMessage}\nJ: ${finalResponse}` }
                 ],
                 model: 'llama-3.1-8b-instant',
                 response_format: { type: "json_object" }
@@ -350,7 +415,7 @@ ${memoryContext}`
         } catch (e) {}
       }
 
-      return fullResponse;
+      return finalResponse;
     } catch (error) {
       console.error(`Error with Groq API Key ${currentClientIndex + 1}:`, error.message);
       if (error.status === 429 || error.status >= 500) {
