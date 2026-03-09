@@ -36,8 +36,8 @@ export const checkProactiveNeeds = async (io) => {
     const lastMsg = memory.history[memory.history.length - 1];
     const minutesSinceLastMsg = lastMsg ? (now.getTime() - new Date(lastMsg.timestamp).getTime()) / (1000 * 60) : 999;
 
-    // 1. Cooldown & Frequency Check (Randomized for human feel)
-    const randomizedCooldown = (25 + Math.random() * 15) * 60 * 1000; // 25-40 minutes
+    // 1. Cooldown & Frequency Check (Increased for less annoyance)
+    const randomizedCooldown = (45 + Math.random() * 20) * 60 * 1000; // 45-65 minutes
     if (!userRequestedJournaling && now.getTime() - lastNudgeTime < randomizedCooldown) return;
 
     console.log(`[J Brain] Evaluating current moment (${now.toLocaleTimeString()})...`);
@@ -51,7 +51,7 @@ export const checkProactiveNeeds = async (io) => {
             Rules:
             - If "User Requested Journaling" is YES, you MUST choose "JOURNALING".
             - If it is after 10 PM and today's journal is NOT written, choose "JOURNALING".
-            - If away for >30 mins, you can choose "SHARE_THOUGHT" or "CURIOSITY".
+            - If away for >60 mins, you can choose "SHARE_THOUGHT" or "CURIOSITY".
             
             [SITUATION]
             - User Requested Journaling: ${userRequestedJournaling ? 'YES' : 'NO'}
@@ -73,15 +73,16 @@ export const checkProactiveNeeds = async (io) => {
             CRITICAL RULES:
             - If "Reminders" is empty, DO NOT mention any meetings or schedule in the "message".
             - If "Notes" is empty, DO NOT mention any projects in the "message".
-            - If there is nothing REAL to report, choose "SILENCE".
-            - NEVER hallucinate a meeting at 11 AM or any other time.
+            - If there is nothing REAL or IMPORTANT to report, choose "SILENCE".
+            - Be very selective. Do NOT be annoying. Silence is often best.
+            - NEVER hallucinate data.
         `;
 
         const completion = await groq.chat.completions.create({
             messages: [{ role: 'system', content: prompt }],
-            model: 'llama-3.1-8b-instant',
+            model: 'llama-3.3-70b-versatile', // UPGRADED
             response_format: { type: "json_object" },
-            temperature: 0.8
+            temperature: 0.6
         });
 
         const result = JSON.parse(completion.choices[0].message.content);

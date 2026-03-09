@@ -65,7 +65,7 @@ export const initDB = async () => {
         `CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, text TEXT, timestamp TEXT)`,
         `CREATE TABLE IF NOT EXISTS reminders (id TEXT PRIMARY KEY, event TEXT, time TEXT, sent INTEGER DEFAULT 0)`,
         `CREATE TABLE IF NOT EXISTS todo (id TEXT PRIMARY KEY, text TEXT, completed INTEGER DEFAULT 0, timestamp TEXT)`,
-        `CREATE TABLE IF NOT EXISTS pdf_extractions (id TEXT PRIMARY KEY, filename TEXT, summary TEXT, entities TEXT, action_items TEXT, upload_date TEXT)`,
+        `CREATE TABLE IF NOT EXISTS pdf_extractions (id TEXT PRIMARY KEY, filename TEXT, summary TEXT, entities TEXT, action_items TEXT, full_content TEXT, upload_date TEXT)`,
         `CREATE TABLE IF NOT EXISTS chat_history (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TEXT)`,
         `CREATE TABLE IF NOT EXISTS long_term_facts (id TEXT PRIMARY KEY, fact TEXT, category TEXT, importance INTEGER DEFAULT 1, timestamp TEXT)`,
         `CREATE TABLE IF NOT EXISTS mood_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, score INTEGER, emotion TEXT, timestamp TEXT)`,
@@ -174,6 +174,7 @@ export const getMemoryCache = async () => {
         ...p,
         entities: JSON.parse(p.entities || '[]'),
         actionItems: JSON.parse(p.action_items || '[]'),
+        fullContent: p.full_content, // LOAD FULL CONTENT
         uploadDate: p.upload_date
     }));
 
@@ -242,7 +243,7 @@ export const archiveDocKnowledge = async (docId) => {
 };
 
 export const savePDFRecord = async (record) => {
-    await execSQL('INSERT INTO pdf_extractions (id, filename, summary, entities, action_items, upload_date) VALUES (?, ?, ?, ?, ?, ?)', [record.id, record.filename, record.summary, JSON.stringify(record.entities), JSON.stringify(record.actionItems), record.uploadDate]);
+    await execSQL('INSERT INTO pdf_extractions (id, filename, summary, entities, action_items, full_content, upload_date) VALUES (?, ?, ?, ?, ?, ?, ?)', [record.id, record.filename, record.summary, JSON.stringify(record.entities), JSON.stringify(record.actionItems), record.fullContent, record.uploadDate]);
 };
 
 export const getAssociativeContext = async () => {

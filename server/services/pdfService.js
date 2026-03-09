@@ -19,6 +19,7 @@ export const processPDF = async (filePath, originalName) => {
             summary: info.summary,
             entities: info.entities,
             actionItems: info.actionItems,
+            fullContent: extractedText, // STORE FULL CONTENT FOR RE-ANALYSIS
             uploadDate: new Date().toISOString()
         };
 

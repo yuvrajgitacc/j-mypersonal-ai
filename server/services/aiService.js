@@ -178,7 +178,8 @@ export const getRelevantContext = async (userMessage, memory) => {
             .map(d => ({
                 filename: d.filename,
                 summary: d.summary,
-                fullDetails: d.entities // This now contains the full date-mapped list
+                entities: d.entities,
+                fullContent: d.fullContent // CRITICAL: Send the raw text for re-analysis
             }));
             
         const relevantNotes = (memory.notes || []).filter(n => (noteIds || []).includes(n.id));
@@ -228,7 +229,7 @@ export const performInternalReview = async (userMessage, context, draftResponse)
 
         const completion = await client.chat.completions.create({
             messages: [{ role: 'system', content: reviewPrompt }],
-            model: 'llama-3.1-8b-instant',
+            model: 'llama-3.3-70b-versatile', // UPGRADED TO 70B
             response_format: { type: "json_object" },
             temperature: 0.1
         });
@@ -394,10 +395,10 @@ ${memoryContext}`
       if (finalResponse.length > 50) {
           const factDistiller = await client.chat.completions.create({
               messages: [
-                  { role: 'system', content: 'Extract new facts. Return JSON: {"fact": "string", "category": "string"} or {"fact": null}.' },
+                  { role: 'system', content: 'Extract new facts (like room numbers, project names, preferences). Return JSON: {"fact": "string", "category": "string"} or {"fact": null}.' },
                   { role: 'user', content: `User: ${userMessage}\nJ: ${finalResponse}` }
               ],
-              model: 'llama-3.1-8b-instant',
+              model: 'llama-3.3-70b-versatile', // UPGRADED
               response_format: { type: "json_object" }
           });
           const distilled = JSON.parse(factDistiller.choices[0].message.content);
@@ -421,7 +422,7 @@ ${memoryContext}`
                     { role: 'system', content: `Extract time. Current: ${currentTime}. Return JSON: {"event": "str", "time": "ISO", "confidence": 0-1}` },
                     { role: 'user', content: `User: ${userMessage}\nJ: ${finalResponse}` }
                 ],
-                model: 'llama-3.1-8b-instant',
+                model: 'llama-3.3-70b-versatile', // UPGRADED
                 response_format: { type: "json_object" }
             });
             const reminderData = JSON.parse(timeExtraction.choices[0].message.content);
@@ -492,7 +493,7 @@ export const scanForUpcomingEvents = async (memory) => {
                 { role: 'system', content: `Today is ${today}. Scan for events in 48h. Return JSON array: [{"event": "str", "relevance": "string"}]` },
                 { role: 'user', content: `Context: ${context}` }
             ],
-            model: 'llama-3.1-8b-instant',
+            model: 'llama-3.3-70b-versatile', // UPGRADED
             response_format: { type: "json_object" },
             temperature: 0.1
         });

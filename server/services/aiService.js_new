@@ -1,0 +1,234 @@
+export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) => {
+  const fullMemory = await getMemoryCache();
+  const relationshipStats = await getRelationshipStats();
+  
+  // 1. Context Retrieval
+  const relevantContext = await getRelevantContext(userMessage, fullMemory);
+
+  // 2. Associative Memory Linking
+  const associativeLink = await findAssociativeLinks(userMessage);
+
+  // 3. Link Research / YouTube Summarization
+  let researchData = "";
+  const linkInfo = await processLinkForResearch(userMessage);
+  if (linkInfo && linkInfo.content) {
+      researchData = `[RESEARCHED LINK DATA]: Type: ${linkInfo.type}, Title: ${linkInfo.title || "Video Transcript"}, Content: ${linkInfo.content.substring(0, 8000)}`;
+  }
+
+  // 4. Sentiment Analysis
+  const sentimentResult = sentimentAnalysis.analyze(userMessage);
+  const currentMood = getEmotionLabel(sentimentResult.score);
+  await logUserMood(sentimentResult.score, currentMood);
+
+  // 5. Web Search Check
+  let webContext = "";
+  const searchDecision = await checkSearchNeeded(userMessage);
+  if (searchDecision.needsSearch) {
+      webContext = await performWebSearch(searchDecision.query);
+  }
+
+  // 6. Secret Thoughts & Diary Check
+  const secretThoughts = await getInternalThoughtsContext(userMessage);
+
+  const memoryContext = `
+[User Memory Context]
+Preferences: ${JSON.stringify(relevantContext.profile)}
+Relationship Stats: ${JSON.stringify(relationshipStats)}
+Relevant Notes: ${JSON.stringify(relevantContext.notes)}
+Relevant Document Insights: ${JSON.stringify(relevantContext.docs)}
+[ASSOCIATIVE LINK]: ${associativeLink.linkFound ? JSON.stringify(associativeLink.connection) : "None detected."}
+${researchData}
+[Live Web Search Data]: ${webContext || "No web search performed."}
+${secretThoughts}
+  `;
+
+  const recentHistory = fullMemory.history.slice(-10);
+
+  const currentTime = new Date().toLocaleString('en-IN', { 
+    timeZone: 'Asia/Kolkata',
+    dateStyle: 'full', 
+    timeStyle: 'long' 
+  });
+
+  const messages = [
+    { 
+        role: 'system', 
+        content: `${systemPrompt}
+
+[SYSTEM 2 THINKING PROTOCOL]
+You MUST process this request in two stages:
+1. INTERNAL_MONOLOGUE: Silently analyze the user's message. Cross-reference the [User Memory Context]. Check for dates, facts, and logic errors.
+2. FINAL_RESPONSE: The warm, caring, and professional response you send to Yuvraj.
+
+Return JSON format:
+{
+    "internal_monologue": "Detailed step-by-step reasoning",
+    "final_response": "The actual message",
+    "send_email_now": true/false,
+    "email_subject": "Brief subject if sending"
+}
+
+[REAL-TIME CONTEXT]
+Current Time: ${currentTime}
+DETECTED USER MOOD: ${currentMood}
+
+${memoryContext}` 
+    },
+    ...recentHistory.map(m => ({ role: m.role, content: m.content })),
+    { role: 'user', content: userMessage }
+  ];
+
+  let attempt = 0;
+  
+  while (attempt < 2) {
+    try {
+      const client = getClient();
+      console.log("[J Brain] Thinking...");
+      
+      const completion = await client.chat.completions.create({
+        messages,
+        model: 'llama-3.3-70b-versatile',
+        response_format: { type: "json_object" },
+        temperature: 0.7,
+      });
+
+      const result = JSON.parse(completion.choices[0].message.content);
+      let internalThought = result.internal_monologue;
+      let finalResponse = result.final_response;
+      let shouldEmail = result.send_email_now || false;
+      let emailSubject = result.email_subject || "Update from J Secretary";
+
+      // --- PHASE 2: INTERNAL CRITIC LOOP ---
+      console.log("[J Brain] Performing Internal Review...");
+      const review = await performInternalReview(userMessage, memoryContext, finalResponse);
+
+      if (review.status === "FAIL") {
+          console.log(`[J Critic Audit]: FAIL - ${review.critique}`);
+          await saveInternalThought(`CRITIC FAILED DRAFT: ${review.critique}`, "critic_alert");
+          
+          const correctionPrompt = [
+              ...messages,
+              { role: 'assistant', content: JSON.stringify(result) },
+              { role: 'system', content: `CRITICAL ERROR DETECTED: ${review.critique}. Instruction: ${review.fix_instructions}. Rewrite your response now with 100% accuracy.` }
+          ];
+
+          const secondChance = await client.chat.completions.create({
+            messages: correctionPrompt,
+            model: 'llama-3.3-70b-versatile',
+            response_format: { type: "json_object" },
+            temperature: 0.3,
+          });
+
+          const fixedResult = JSON.parse(secondChance.choices[0].message.content);
+          internalThought = fixedResult.internal_monologue;
+          finalResponse = fixedResult.final_response;
+          shouldEmail = fixedResult.send_email_now || shouldEmail;
+          console.log("[J Brain] Draft corrected successfully.");
+      } else {
+          console.log("[J Critic Audit]: PASS");
+      }
+
+      // --- EMAIL EXECUTION ---
+      if (shouldEmail) {
+          console.log("DEBUG: J decided to send an email. Executing...");
+          const emailHtml = `
+            <div style="font-family: sans-serif; padding: 30px; color: #333; max-width: 600px; border: 1px solid #eee; border-radius: 15px; margin: auto;">
+                <h2 style="color: #3b82f6;">Hi Boss! 👋</h2>
+                <div style="background: #f9fafb; padding: 20px; border-radius: 12px; margin: 20px 0; line-height: 1.6;">
+                    ${finalResponse.replace(/\n/g, '<br>')}
+                </div>
+                <p style="font-weight: bold; color: #3b82f6;">— J (Your AI Companion)</p>
+            </div>
+          `;
+          await sendEmailNotification(emailSubject, finalResponse, emailHtml);
+      }
+
+      console.log(`[J Thought]: ${internalThought.substring(0, 100)}...`);
+
+      // Save thought & Stream response
+      await saveInternalThought(internalThought, "scratchpad");
+
+      if (onChunk) {
+          const chunks = finalResponse.split(' ');
+          for (const chunk of chunks) {
+              onChunk(chunk + ' ');
+              await new Promise(resolve => setTimeout(resolve, 30));
+          }
+      }
+      
+      const lowerMsg = userMessage.toLowerCase();
+
+      // Save interaction
+      await appendToHistory('user', userMessage);
+      await appendToHistory('assistant', finalResponse);
+
+      // Automated Background Tasks
+      const userAskedToJournal = lowerMsg.includes("write your diary") || lowerMsg.includes("diary likh lo") || lowerMsg.includes("reflect on the day") || lowerMsg.includes("journaling shuru karo");
+      if (userAskedToJournal) await manualTriggerJournaling();
+
+      if (finalResponse.length > 50) {
+          const factDistiller = await client.chat.completions.create({
+              messages: [
+                  { role: 'system', content: 'Extract new facts. Return JSON: {"fact": "string", "category": "string"} or {"fact": null}.' },
+                  { role: 'user', content: `User: ${userMessage}\nJ: ${finalResponse}` }
+              ],
+              model: 'llama-3.1-8b-instant',
+              response_format: { type: "json_object" }
+          });
+          const distilled = JSON.parse(factDistiller.choices[0].message.content);
+          if (distilled.fact) await saveLongTermFact(distilled.fact, distilled.category);
+      }
+
+      // Notifications
+      if (finalResponse.includes("📱 J Notification Center")) {
+          let notificationTitle = "A Message from J Secretary";
+          const titleMatch = finalResponse.match(/📱 J Notification Center:\s*([^:\n]+):/);
+          if (titleMatch && titleMatch[1]) notificationTitle = titleMatch[1].trim();
+          await sendNotificationToCenter(notificationTitle, finalResponse, "chat");
+      }
+
+      // --- REMINDER EXTRACTION (STRICTER) ---
+      const directCommand = lowerMsg.includes("remind me") || lowerMsg.includes("set a reminder") || lowerMsg.includes("alarm") || lowerMsg.includes("yaad dilana") || lowerMsg.includes("reminder lagao");
+      
+      if (directCommand) {
+        try {
+            console.log("DEBUG: Direct reminder command detected. Extracting...");
+            const timeExtraction = await client.chat.completions.create({
+                messages: [
+                    { 
+                        role: 'system', 
+                        content: `You are a precision time-extraction engine. 
+                        Current Time: ${currentTime}
+                        
+                        RULES:
+                        1. Only extract a reminder if the user EXPLICITLY asked for it in their last message.
+                        2. If they are just talking about a future date without saying "remind me", return {"event": null}.
+                        3. Return JSON: {"event": "string", "time": "ISO", "confidence": 0-1}.` 
+                    },
+                    { role: 'user', content: `User said: "${userMessage}"` }
+                ],
+                model: 'llama-3.1-8b-instant',
+                response_format: { type: "json_object" }
+            });
+
+            const reminderData = JSON.parse(timeExtraction.choices[0].message.content);
+            if (reminderData.time && reminderData.event && reminderData.confidence > 0.9) {
+                await saveReminder(reminderData.event, reminderData.time);
+                if (onReminderSaved) onReminderSaved(reminderData);
+            }
+        } catch (e) {}
+      }
+
+      return finalResponse;
+    } catch (error) {
+      console.error(`Error with Groq API Key ${currentClientIndex + 1}:`, error.message);
+      if (error.status === 429 || error.status >= 500) {
+        currentClientIndex = currentClientIndex === 0 ? 1 : 0;
+        attempt++;
+      } else {
+        throw error;
+      }
+    }
+  }
+  throw new Error("Both API keys failed.");
+};

@@ -15,26 +15,25 @@ export const setupWebSockets = (io) => {
 
         socket.on('chat_message', async (data) => {
             const { message } = data;
+            console.log(`[Socket] Received message: "${message}"`);
             
-            // Save user message to history
-            await appendToHistory('user', message);
-
             try {
+                // J is thinking...
                 let aiFullResponse = "";
                 
-                await generateAIResponse(message, (chunk) => {
+                // Call J's Brain
+                const finalResponse = await generateAIResponse(message, (chunk) => {
                     aiFullResponse += chunk;
                     socket.emit('chat_stream', { chunk });
                 }, (reminder) => {
-                    // FLAW 3: Emit event to show UI notification
+                    console.log(`[Socket] Reminder detected: ${reminder.event} at ${reminder.time}`);
                     socket.emit('reminder_saved', { event: reminder.event, time: reminder.time });
                 });
 
-                // End of stream
-                socket.emit('chat_stream_end', { fullText: aiFullResponse });
-                
-                // Save AI response to history
-                await appendToHistory('assistant', aiFullResponse);
+                // The message history is ALREADY saved inside generateAIResponse now.
+                // So we just need to signal the end of the stream.
+                socket.emit('chat_stream_end', { fullText: finalResponse });
+                console.log(`[Socket] Finished streaming for: "${message}"`);
 
             } catch (error) {
                 console.error("AI Generation Error:", error);
