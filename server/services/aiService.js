@@ -29,14 +29,17 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // API Keys loaded from environment variables for security
-const KEY_1 = process.env.GROQ_API_KEY_1;
-const KEY_2 = process.env.GROQ_API_KEY_2;
+const groqKeys = [
+    process.env.GROQ_API_KEY_1,
+    process.env.GROQ_API_KEY_2,
+    process.env.GROQ_API_KEY_3,
+    process.env.GROQ_API_KEY_4,
+    process.env.GROQ_API_KEY_5,
+    process.env.GROQ_API_KEY_6
+].filter(key => key && key.trim() !== "");
 
-const groq1 = new Groq({ apiKey: KEY_1 });
-const groq2 = new Groq({ apiKey: KEY_2 });
-
-let currentClientIndex = 0; // 0 for KEY_1, 1 for KEY_2
-const clients = [groq1, groq2];
+const clients = groqKeys.length > 0 ? groqKeys.map(k => new Groq({ apiKey: k })) : [new Groq({ apiKey: 'missing_key' })];
+let currentClientIndex = 0;
 
 const getClient = () => clients[currentClientIndex];
 
@@ -332,7 +335,7 @@ ${memoryContext}`
 
   let attempt = 0;
   
-  while (attempt < 2) {
+  while (attempt < clients.length) {
     try {
       const client = getClient();
       console.log("[J Brain] Thinking...");
