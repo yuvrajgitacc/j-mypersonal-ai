@@ -98,19 +98,18 @@ export const getRelevantContext = async (userMessage, memory) => {
  */
 const executeBackgroundActions = async (userMessage, jResponse, userProfile) => {
     try {
-        console.log("[J Action Engine] Scanning conversation for system commands...");
-        const prompt = `You are J's Action Engine. Analyze the conversation and extract real actions to execute on the backend.
-        
-        [CONVERSATION]
+        console.log("[J Action Engine] Scanning for commands...");
+        const prompt = `You are J's Action Engine. Analyze the conversation and extract real actions.
         Boss: "${userMessage}"
         J: "${jResponse}"
         
         [RULES]
-        1. send_journal_email: true ONLY if Boss explicitly asked to email the journal/diary.
-        2. facts_to_remember: extract explicit facts Boss told J to remember (e.g., "I am in D3").
-        3. reminders_to_set: extract explicit requests to be reminded. Format time clearly.
+        1. send_journal_email: true if Boss asked to see/email his journal or diary (e.g. "send journal", "mail diary", "today's entry").
+        2. write_journal_now: true if Boss asked J to write/reflect now OR if he asked for today's journal and it's not likely written.
+        3. facts_to_remember: any specific personal facts or project details Boss mentioned.
+        4. reminders_to_set: specific time-based reminders.
 
-        Return ONLY JSON:
+        Return JSON:
         {
             "send_journal_email": boolean,
             "write_journal_now": boolean,
@@ -120,52 +119,57 @@ const executeBackgroundActions = async (userMessage, jResponse, userProfile) => 
 
         const res = await executeWithFailover({
             messages: [{ role: 'system', content: prompt }],
-            model: 'llama-3.1-8b-instant', // Fast, cheap action extraction
+            model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" },
             temperature: 0.1
         }, false);
 
         const actions = JSON.parse(res.choices[0].message.content);
+        const today = new Date().toISOString().split('T')[0];
 
-        // 1. EXECUTE EMAIL
+        // 1. WRITE JOURNAL (IF REQUESTED OR NEEDED FOR EMAIL)
+        if (actions.write_journal_now) {
+            console.log("[J Action] Writing journal now...");
+            await processJournaling(today);
+        }
+
+        // 2. EXECUTE EMAIL
         if (actions.send_journal_email) {
-            console.log("[J Action] Executing real email delivery...");
+            console.log("[J Action] Boss requested journal via email.");
             const journals = await getRecentJournals(1);
-            if (journals.length > 0) {
+            
+            if (journals.length > 0 && journals[0].date === today) {
+                // Today's journal exists, send it
                 const j = journals[0];
-                const html = `<div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd;">
-                                <h2 style="color: #3498db;">J's Private Journal</h2>
-                                <p><b>Date:</b> ${j.date}</p>
-                                <p style="white-space: pre-wrap;">${j.content}</p>
-                              </div>`;
-                await sendEmailNotification(`J's Secret Journal: ${j.date} 🌙`, j.content, html, "chat");
+                await sendEmailNotification(`J's Secret Journal: ${j.date} 🌙`, j.content, `<div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd;"><h2>J's Private Journal</h2><p><b>Date:</b> ${j.date}</p><p style="white-space: pre-wrap;">${j.content}</p></div>`, "chat");
+            } else if (!actions.write_journal_now) {
+                // Today's doesn't exist and we didn't just write it, let's write it now then send
+                console.log("[J Action] Today's journal missing. Writing first...");
+                await processJournaling(today);
+                const newJournals = await getRecentJournals(1);
+                if (newJournals.length > 0) {
+                    const j = newJournals[0];
+                    await sendEmailNotification(`J's Secret Journal: ${j.date} 🌙`, j.content, `<div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd;"><h2>J's Private Journal</h2><p><b>Date:</b> ${j.date}</p><p style="white-space: pre-wrap;">${j.content}</p></div>`, "chat");
+                }
             }
         }
 
-        // 2. EXECUTE FACTS
+        // 3. EXECUTE FACTS
         if (actions.facts_to_remember?.length > 0) {
             for (const f of actions.facts_to_remember) {
-                console.log(`[J Action] Saving fact: ${f.fact}`);
                 await saveLongTermFact(f.fact, f.category);
             }
         }
 
-        // 3. EXECUTE REMINDERS
+        // 4. EXECUTE REMINDERS
         if (actions.reminders_to_set?.length > 0) {
             for (const r of actions.reminders_to_set) {
-                console.log(`[J Action] Setting reminder: ${r.event} at ${r.time}`);
                 await saveReminder(r.event, r.time);
             }
         }
 
-        // 4. WRITE JOURNAL
-        if (actions.write_journal_now) {
-            const today = new Date().toISOString().split('T')[0];
-            await processJournaling(today);
-        }
-
     } catch (e) {
-        console.error("[J Action Engine] Failed to parse or execute actions.", e);
+        console.error("[J Action Engine] Error:", e);
     }
 };
 

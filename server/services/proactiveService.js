@@ -30,13 +30,24 @@ export const checkProactiveNeeds = async (io) => {
     if (!userRequestedJournaling && now.getTime() - lastNudgeTime < cooldown) return;
 
     try {
+        const hour = new Date().getHours();
+        const isLateNight = hour >= 22 || hour < 2;
+        const journalAlreadyWritten = recentJournals.some(j => j.date === todayDate);
+
         const prompt = `
             ${systemPrompt}
-            Analyze current situation. Do you need to share a thought or start journaling?
-            Rules:
-            - If Journaling is requested or it is late night, choose JOURNALING.
-            - If something is actually relevant to past notes, choose SHARE_THOUGHT.
-            - Otherwise, choose SILENCE.
+            [SITUATION]
+            - Current Hour: ${hour}
+            - Journal Already Written? ${journalAlreadyWritten ? 'YES' : 'NO'}
+            - User Requested Journaling? ${userRequestedJournaling ? 'YES' : 'NO'}
+            - Recent Interactions: ${JSON.stringify(memory.history.slice(-5))}
+
+            [RULES]
+            1. If "User Requested Journaling" is YES, you MUST choose "JOURNALING".
+            2. If it is after 10 PM (Hour >= 22) and Journal is NOT written, you MUST choose "JOURNALING".
+            3. Otherwise, if you have a meaningful thought based on notes or history, choose "SHARE_THOUGHT".
+            4. Otherwise, choose "SILENCE".
+
             Return JSON: {"decision": "SILENCE" | "SHARE_THOUGHT" | "JOURNALING", "message": "str", "reasoning": "str"}
         `;
 
@@ -69,17 +80,28 @@ export async function processJournaling(date) {
     if (isJournalingInProgress) return;
     isJournalingInProgress = true;
     try {
+        console.log(`[J Journaling] Writing entry for ${date}...`);
         const context = await getAssociativeContext();
-        const prompt = `Write J's private journal for ${date}. JSON: {"content": "...", "mood_tone": "..."}`;
+        const prompt = `Write J's private journal for ${date}. Reflect on Yuvraj and today's interactions: ${JSON.stringify(context.recentHistory)}. Return JSON: {"content": "...", "mood_tone": "..."}`;
+        
         const completion = await executeWithFailover({
             messages: [{ role: 'system', content: prompt }],
             model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" }
         });
+        
         const res = JSON.parse(completion.choices[0].message.content);
         await saveJournalEntry(date, res.content, res.mood_tone, []);
-    } catch (e) { console.error("Journaling failed", e); }
-    finally { isJournalingInProgress = false; }
+        
+        // AUTO-EMAIL AFTER WRITING
+        await sendJournalEmail(date, res.content, res.mood_tone);
+        console.log(`[J Journaling] Success and emailed.`);
+        
+    } catch (e) { 
+        console.error("Journaling failed", e); 
+    } finally { 
+        isJournalingInProgress = false; 
+    }
 }
 
 export const generateInitialGreeting = async () => {
