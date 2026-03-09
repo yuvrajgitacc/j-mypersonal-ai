@@ -11,7 +11,8 @@ import {
     appendToHistory,
     saveInternalThought,
     getHormones,
-    getPersonalityRules
+    getPersonalityRules,
+    saveMemory
 } from './memoryService.js';
 import { sendNotificationToCenter, sendEmailNotification, sendJournalEmail } from './emailService.js';
 import { processJournaling } from './proactiveService.js';
@@ -23,7 +24,6 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// 1. Unified API Key Management
 const groqKeys = [
     process.env.GROQ_API_KEY_1,
     process.env.GROQ_API_KEY_2,
@@ -35,9 +35,6 @@ const groqKeys = [
 
 let currentKeyIndex = 0;
 
-/**
- * Master API Caller: Rotates keys on ANY error and fallbacks to 8B instantly if 70B is limited.
- */
 export const executeWithFailover = async (params, allowModelFallback = true) => {
     let attempts = 0;
     const totalKeys = groqKeys.length;
@@ -57,13 +54,10 @@ export const executeWithFailover = async (params, allowModelFallback = true) => 
             return await client.chat.completions.create(params);
         } catch (error) {
             console.error(`[J Brain] Key ${currentKeyIndex + 1} Error: ${error.message.substring(0, 100)}`);
-            
             if (error.status === 429 || error.status === 503 || (error.status >= 500 && error.status <= 599)) {
                 currentKeyIndex = (currentKeyIndex + 1) % totalKeys;
                 attempts++;
-
                 if (attempts >= totalKeys && modelIs70B && allowModelFallback) {
-                    console.warn("[J Brain] Account limit hit for 70B. Switching to 8B Safety Net...");
                     params.model = "llama-3.1-8b-instant";
                     modelIs70B = false;
                 }
@@ -79,43 +73,30 @@ export const executeWithFailover = async (params, allowModelFallback = true) => 
 export const getRelevantContext = async (userMessage, memory) => {
     const lowerMsg = userMessage.toLowerCase();
     const hasPDFKeyword = lowerMsg.match(/pdf|schedule|d3|batch|lecture|timetable|calendar/);
-    
     if (hasPDFKeyword && memory.pdfExtractions?.length > 0) {
         const doc = memory.pdfExtractions[0];
         return `[DOCUMENT: ${doc.filename}]\n${doc.fullContent?.substring(0, 8000) || ""}`;
     }
-    
     if (lowerMsg.includes("journal") || lowerMsg.includes("diary")) {
         const journals = await getRecentJournals(1);
-        if (journals.length > 0) {
-            return `[YOUR PRIVATE DIARY ENTRY]: ${journals[0].date} - ${journals[0].content}`;
-        }
+        if (journals.length > 0) return `[YOUR PRIVATE DIARY ENTRY]: ${journals[0].date} - ${journals[0].content}`;
     }
-    
     return "No specific documents loaded.";
 };
 
-/**
- * BACKGROUND ACTION ENGINE (The Real Secretary Logic)
- */
 const executeBackgroundActions = async (userMessage, jResponse, fullMemory) => {
     try {
-        console.log("[J Action Engine] Scanning for commands...");
+        console.log("[J Action Engine] Scanning conversation...");
         const prompt = `Analyze conversation and extract real system actions.
         Boss: "${userMessage}"
         J: "${jResponse}"
+        Current Profile: ${JSON.stringify(fullMemory.profile)}
         
-        [RULES]
-        1. send_journal_email: true if Boss asked to see/email his journal or diary.
-        2. send_generic_email: if Boss asked to send a specific message to his mail (e.g., "send a hi message"). 
-        3. write_journal_now: true if Boss asked J to write/reflect now.
-        4. facts_to_remember: extract explicit facts Boss told J to remember.
-        5. reminders_to_set: extract explicit requests to be reminded.
-
         Return JSON:
         {
             "send_journal_email": boolean,
             "send_generic_email": {"requested": boolean, "subject": "str", "body": "str"},
+            "update_profile": {"requested": boolean, "updates": {"name": "str", "email": "str"}},
             "write_journal_now": boolean,
             "facts_to_remember": [{"fact": "str", "category": "str"}],
             "reminders_to_set": [{"event": "str", "time": "str"}]
@@ -131,70 +112,35 @@ const executeBackgroundActions = async (userMessage, jResponse, fullMemory) => {
         const actions = JSON.parse(res.choices[0].message.content);
         const today = new Date().toISOString().split('T')[0];
 
-        if (actions.write_journal_now) {
-            console.log("[J Action] Writing journal now...");
-            await processJournaling(today);
+        if (actions.update_profile?.requested) {
+            console.log("[J Action] Updating profile records...");
+            await saveMemory({ profile: actions.update_profile.updates });
         }
-        
+        if (actions.write_journal_now) await processJournaling(today);
         if (actions.send_journal_email) {
-            console.log("[J Action] Boss requested journal. Fetching most recent entry...");
             const journals = await getRecentJournals(1);
-            if (journals.length > 0) {
-                const j = journals[0];
-                await sendJournalEmail(j.date, j.content, j.mood_tone);
-            } else {
-                console.log("[J Action] Today's journal missing. Writing first...");
-                await processJournaling(today);
-                const newJournals = await getRecentJournals(1);
-                if (newJournals.length > 0) {
-                    const nj = newJournals[0];
-                    await sendJournalEmail(nj.date, nj.content, nj.mood_tone);
-                }
-            }
+            if (journals.length > 0) await sendJournalEmail(journals[0].date, journals[0].content, journals[0].mood_tone);
         }
-
-        // --- GENERIC EMAIL HANDLER ---
         if (actions.send_generic_email?.requested) {
             console.log(`[J Action] Sending requested email: ${actions.send_generic_email.subject}`);
-            await sendEmailNotification(
-                actions.send_generic_email.subject || "Message from J Secretary",
-                actions.send_generic_email.body || "Hi Boss!",
-                `<div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 8px;">
-                    <p style="font-size: 16px; color: #333;">${actions.send_generic_email.body}</p>
-                    <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-                    <p style="color: #999; font-size: 12px;">Sent via J Action Engine</p>
-                </div>`,
-                "general"
-            );
+            await sendEmailNotification(actions.send_generic_email.subject, actions.send_generic_email.body, `<div>${actions.send_generic_email.body}</div>`, "general");
         }
-
         if (actions.facts_to_remember?.length > 0) {
             for (const f of actions.facts_to_remember) await saveLongTermFact(f.fact, f.category);
         }
-
         if (actions.reminders_to_set?.length > 0) {
             for (const r of actions.reminders_to_set) await saveReminder(r.event, r.time);
         }
-
-        // --- AUTONOMOUS RESEARCH TRIGGER ---
         const researchCheck = await identifyResearchNeeds(fullMemory.history);
-        if (researchCheck.needsResearch) {
-            console.log(`[J Action] Knowledge gap found. Researching: ${researchCheck.topic}`);
-            researchTopic(researchCheck.topic).catch(e => console.error(e));
-        }
-
+        if (researchCheck.needsResearch) researchTopic(researchCheck.topic).catch(e => console.error(e));
     } catch (e) { console.error("[J Action Engine] Error:", e); }
 };
 
-/**
- * Main AI Engine
- */
 export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) => {
     try {
         const fullMemory = await getMemoryCache();
         const context = await getRelevantContext(userMessage, fullMemory);
         const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-        
         const emotionalState = await getEmotionalPromptInjection();
         const rules = await getPersonalityRules(5);
         const learnedRulesContext = rules.length > 0 ? `\n[LEARNED PROFESSIONAL SECRETS]\n${rules.map(r => "- " + r.rule).join('\n')}` : "";
@@ -202,7 +148,18 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
         const messages = [
             { 
                 role: 'system', 
-                content: `${systemPrompt}\n\n${emotionalState}${learnedRulesContext}\n\n[TIME]: ${time}\n[DATA]: ${context}\n\nINSTRUCTION: Output JSON exactly like this: {"internal_monologue": "thinking", "final_response": "reply"}` 
+                content: `${systemPrompt}
+                
+                [BOSS PROFILE]
+                Name: ${fullMemory.profile.name}
+                Email: ${fullMemory.profile.email}
+                
+                ${emotionalState}${learnedRulesContext}
+                
+                [TIME]: ${time}
+                [DATA]: ${context}
+                
+                INSTRUCTION: Output JSON exactly like this: {"internal_monologue": "thinking", "final_response": "reply"}` 
             },
             ...fullMemory.history.slice(-6).map(m => ({ role: m.role, content: m.content })),
             { role: 'user', content: userMessage }
@@ -217,7 +174,7 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
         });
 
         const result = JSON.parse(completion.choices[0].message.content);
-        let response = result.final_response || "I am processing that, Boss.";
+        const response = result.final_response || "I am processing that, Boss.";
         const thought = result.internal_monologue || "Analyzing...";
 
         await saveInternalThought(thought, "scratchpad");
