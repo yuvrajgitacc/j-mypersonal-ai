@@ -13,7 +13,7 @@ import {
     getHormones,
     getPersonalityRules
 } from './memoryService.js';
-import { sendNotificationToCenter, sendEmailNotification } from './emailService.js';
+import { sendNotificationToCenter, sendEmailNotification, sendJournalEmail } from './emailService.js';
 import { processJournaling } from './proactiveService.js';
 import { systemPrompt } from '../config/systemPrompt.js';
 import { evaluateEmotionalState, getEmotionalPromptInjection } from './emotion/emotionEngine.js';
@@ -114,13 +114,25 @@ const executeBackgroundActions = async (userMessage, jResponse, fullMemory) => {
         const actions = JSON.parse(res.choices[0].message.content);
         const today = new Date().toISOString().split('T')[0];
 
-        if (actions.write_journal_now) await processJournaling(today);
+        if (actions.write_journal_now) {
+            console.log("[J Action] Writing journal now...");
+            await processJournaling(today);
+        }
         
         if (actions.send_journal_email) {
+            console.log("[J Action] Boss requested journal. Fetching most recent entry...");
             const journals = await getRecentJournals(1);
             if (journals.length > 0) {
                 const j = journals[0];
-                await sendEmailNotification(`J's Secret Journal: ${j.date} 🌙`, j.content, `<div>${j.content}</div>`, "chat");
+                await sendJournalEmail(j.date, j.content, j.mood_tone);
+            } else {
+                console.log("[J Action] Today's journal missing. Writing first...");
+                await processJournaling(today);
+                const newJournals = await getRecentJournals(1);
+                if (newJournals.length > 0) {
+                    const nj = newJournals[0];
+                    await sendJournalEmail(nj.date, nj.content, nj.mood_tone);
+                }
             }
         }
 
