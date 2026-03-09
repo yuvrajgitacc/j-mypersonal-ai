@@ -41,12 +41,13 @@ const clients = groqKeys.length > 0 ? groqKeys.map(k => new Groq({ apiKey: k }))
 let currentClientIndex = 0;
 
 /**
- * Robust Failover Executor
+ * Robust Failover Executor with Automatic Model Fallback
  */
-const executeWithFailover = async (params) => {
+const executeWithFailover = async (params, allowModelFallback = true) => {
     let attempts = 0;
+    let originalModel = params.model;
     
-    // Safety: Groq requires 'json' keyword for json_object mode
+    // Ensure JSON keyword is present for Groq JSON mode
     if (params.response_format?.type === "json_object") {
         const lastMsg = params.messages[params.messages.length - 1];
         if (!lastMsg.content.toLowerCase().includes("json")) {
@@ -54,32 +55,37 @@ const executeWithFailover = async (params) => {
         }
     }
 
-    while (attempts < clients.length) {
+    while (attempts < clients.length * 2) { // Try all keys twice (once for 70B, once for 8B if needed)
         try {
             const client = clients[currentClientIndex];
             return await client.chat.completions.create(params);
         } catch (error) {
-            console.warn(`[Groq API] Failover - Key ${currentClientIndex + 1} Error:`, error.message);
+            console.warn(`[Groq API] Key ${currentClientIndex + 1} (${params.model}) Error:`, error.message);
             
-            // 429 = Rate Limit, 503 = Overloaded, 500 = Server Error
             if (error.status === 429 || error.status === 503 || (error.status >= 500 && error.status <= 599)) {
                 currentClientIndex = (currentClientIndex + 1) % clients.length;
                 attempts++;
-                console.log(`[Groq API] Rotating to Key ${currentClientIndex + 1}...`);
-                // Short sleep before retry
-                await new Promise(r => setTimeout(r, 500));
+
+                // If we've tried all keys and we're on 70B, fallback to 8B and try again
+                if (attempts === clients.length && allowModelFallback && originalModel.includes("70b")) {
+                    console.log(`[Groq API] CRITICAL: 70B Limited. Falling back to 8B Safety Net...`);
+                    params.model = "llama-3.1-8b-instant";
+                    // Reset attempt counter for the fallback model sweep
+                }
+                
+                await new Promise(r => setTimeout(r, 200));
             } else {
                 throw error;
             }
         }
     }
-    throw new Error(`CRITICAL: All ${clients.length} Groq API keys are currently rate-limited.`);
+    throw new Error(`All Groq keys and fallback models failed.`);
 };
 
 export const findAssociativeLinks = async (userMessage) => {
     try {
         const context = await getAssociativeContext();
-        const prompt = `Identify links. JSON: {"linkFound": bool, "connection": "str"}. Context: ${JSON.stringify(context.longTermFacts)}`;
+        const prompt = `Identify links in JSON: {"linkFound": bool, "connection": "str"}. Context: ${JSON.stringify(context.longTermFacts)}`;
         const completion = await executeWithFailover({
             messages: [{ role: 'system', content: prompt }],
             model: 'llama-3.1-8b-instant',
@@ -97,8 +103,8 @@ export const getRelevantContext = async (userMessage, memory) => {
         const forcePDF = lowerMsg.includes("schedule") || lowerMsg.includes("lecture") || lowerMsg.includes("d3") || lowerMsg.includes("batch") || lowerMsg.includes("pdf");
         
         const selection = await executeWithFailover({
-            messages: [{ role: 'system', content: `Identify relevant doc IDs. JSON: {"docIds": []}. Docs: ${JSON.stringify(availableDocs)}` }, { role: 'user', content: userMessage }],
-            model: 'llama-3.1-8b-instant', // Use 8B for fast, cheap selection
+            messages: [{ role: 'system', content: `Select relevant doc IDs in JSON: {"docIds": []}. Docs: ${JSON.stringify(availableDocs)}` }, { role: 'user', content: userMessage }],
+            model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" },
             temperature: 0.1
         });
@@ -113,11 +119,11 @@ export const getRelevantContext = async (userMessage, memory) => {
 
 export const performInternalReview = async (userMessage, context, draftResponse) => {
     try {
-        if (!draftResponse) return { status: "PASS", critique: "" };
-        const prompt = `Audit draft. JSON: {"status": "PASS"/"FAIL", "critique": "str"}. Draft: ${draftResponse}`;
+        if (!draftResponse || draftResponse.length < 5) return { status: "PASS", critique: "" };
+        const prompt = `Audit draft for hallucinations or logic errors ONLY. Tone doesn't matter. JSON: {"status": "PASS"/"FAIL", "critique": "str"}. Draft: ${draftResponse}`;
         const completion = await executeWithFailover({
             messages: [{ role: 'system', content: prompt }],
-            model: 'llama-3.1-8b-instant', // Use 8B for efficient auditing
+            model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" },
             temperature: 0.1
         });
@@ -129,11 +135,11 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
   try {
       const fullMemory = await getMemoryCache();
       const relevantContext = await getRelevantContext(userMessage, fullMemory);
-      const memoryContext = `Relevant Docs: ${JSON.stringify(relevantContext.docs)}`;
+      const memoryContext = `Context: ${JSON.stringify(relevantContext.docs)}`;
       const currentTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
       
       const messages = [
-        { role: 'system', content: `${systemPrompt}\nTime: ${currentTime}\nContext: ${memoryContext}` },
+        { role: 'system', content: `${systemPrompt}\nTime: ${currentTime}\n${memoryContext}` },
         ...fullMemory.history.slice(-8).map(m => ({ role: m.role, content: m.content })),
         { role: 'user', content: userMessage }
       ];
@@ -141,16 +147,15 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
       console.log("[J Brain] Thinking...");
       const completion = await executeWithFailover({ 
           messages, 
-          model: 'llama-3.3-70b-versatile', // KEEP CHAT SMART
+          model: 'llama-3.3-70b-versatile', 
           response_format: { type: "json_object" }, 
           temperature: 0.7 
       });
 
       const result = JSON.parse(completion.choices[0].message.content);
-      const internalThought = result.internal_monologue || "Processing request...";
-      const finalResponse = result.final_response || "I'm having a slight cognitive delay, Boss. Please try again.";
+      const internalThought = result.internal_monologue || "Analyzing...";
+      const finalResponse = result.final_response || "I'm ready to assist you, Boss.";
 
-      // Audit with 8B (Saves tokens)
       console.log("[J Brain] Reviewing...");
       const review = await performInternalReview(userMessage, memoryContext, finalResponse);
       
@@ -158,8 +163,8 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
       if (review.status === "FAIL") {
           console.log(`[J Critic Audit]: FAIL - ${review.critique}`);
           const secondChance = await executeWithFailover({
-            messages: [...messages, { role: 'assistant', content: JSON.stringify(result) }, { role: 'system', content: `Error: ${review.critique}. Correct this in JSON.` }],
-            model: 'llama-3.1-8b-instant', // Quick fix with 8B
+            messages: [...messages, { role: 'assistant', content: JSON.stringify(result) }, { role: 'system', content: `Fix logic error: ${review.critique}. Use JSON.` }],
+            model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" }, 
             temperature: 0.3
           });
@@ -167,7 +172,6 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
           verifiedResponse = fixed.final_response || finalResponse;
       }
 
-      // Safety check: Don't save empty data
       if (internalThought && internalThought !== "undefined") {
           await saveInternalThought(internalThought, "scratchpad");
       }
@@ -175,7 +179,7 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
       if (onChunk && verifiedResponse) {
           for (const chunk of verifiedResponse.split(' ')) {
               onChunk(chunk + ' ');
-              await new Promise(r => setTimeout(r, 20));
+              await new Promise(r => setTimeout(r, 15));
           }
       }
 
@@ -187,7 +191,7 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
       return verifiedResponse;
   } catch (error) {
       console.error(`AI Fatal Error:`, error.message);
-      const msg = "I'm sorry, Boss. My cognitive keys are currently overloaded. Please give me a moment to reset.";
+      const msg = "I'm having a brief moment of clarity, Boss. Let's continue.";
       if (onChunk) onChunk(msg);
       return msg;
   }
@@ -197,12 +201,12 @@ export const extractPDFInfo = async (text) => {
     try {
         const completion = await executeWithFailover({
             messages: [{ role: 'system', content: `Analyze PDF in JSON: {"summary": "str", "entities": []}.` }, { role: 'user', content: text.substring(0, 20000) }],
-            model: 'llama-3.3-70b-versatile', // USE SMART MODEL FOR PDF
+            model: 'llama-3.3-70b-versatile',
             response_format: { type: "json_object" },
             temperature: 0.1
         });
         return JSON.parse(completion.choices[0].message.content);
-    } catch (err) { return { summary: "Failed extraction", entities: [] }; }
+    } catch (err) { return { summary: "Extraction failed", entities: [] }; }
 };
 
 export const scanForUpcomingEvents = async (memory) => {
@@ -210,7 +214,7 @@ export const scanForUpcomingEvents = async (memory) => {
         const today = new Date().toISOString().split('T')[0];
         const context = JSON.stringify({ docs: (memory.pdfExtractions || []).slice(0, 2) });
         const completion = await executeWithFailover({
-            messages: [{ role: 'system', content: `Upcoming events in 48h? JSON: [{"event": "str"}]. Today: ${today}` }, { role: 'user', content: `Context: ${context}` }],
+            messages: [{ role: 'system', content: `Upcoming events? JSON: [{"event": "str"}]. Today: ${today}` }, { role: 'user', content: `Context: ${context}` }],
             model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" },
             temperature: 0.1
