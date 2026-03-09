@@ -71,7 +71,8 @@ export const initDB = async () => {
         `CREATE TABLE IF NOT EXISTS mood_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, score INTEGER, emotion TEXT, timestamp TEXT)`,
         `CREATE TABLE IF NOT EXISTS internal_monologue (id INTEGER PRIMARY KEY AUTOINCREMENT, thought TEXT, type TEXT, status TEXT DEFAULT 'unspoken', timestamp TEXT)`,
         `CREATE TABLE IF NOT EXISTS j_private_journal (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE, content TEXT, mood_tone TEXT, learned_facts TEXT, timestamp TEXT)`,
-        `CREATE TABLE IF NOT EXISTS idea_graph (id INTEGER PRIMARY KEY AUTOINCREMENT, concept_a TEXT, concept_b TEXT, relationship TEXT, timestamp TEXT)`
+        `CREATE TABLE IF NOT EXISTS idea_graph (id INTEGER PRIMARY KEY AUTOINCREMENT, concept_a TEXT, concept_b TEXT, relationship TEXT, timestamp TEXT)`,
+        `CREATE TABLE IF NOT EXISTS digital_hormones (hormone TEXT PRIMARY KEY, level INTEGER, last_updated TEXT)`
     ];
 
     for (const sql of schema) {
@@ -80,6 +81,21 @@ export const initDB = async () => {
         } else {
             db.exec(sql);
         }
+    }
+
+    // Initialize base hormones if they don't exist
+    try {
+        const now = new Date().toISOString();
+        const baseHormones = [
+            { h: 'affection', l: 50 },
+            { h: 'stress', l: 10 },
+            { h: 'frustration', l: 0 }
+        ];
+        for (const bh of baseHormones) {
+            await execSQL('INSERT OR IGNORE INTO digital_hormones (hormone, level, last_updated) VALUES (?, ?, ?)', [bh.h, bh.l, now]);
+        }
+    } catch (e) {
+        console.error("Failed to seed hormones:", e);
     }
 
     // --- MIGRATION: ADD full_content COLUMN IF MISSING ---

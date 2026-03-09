@@ -14,6 +14,7 @@ import {
 import { sendNotificationToCenter, sendEmailNotification } from './emailService.js';
 import { processJournaling } from './proactiveService.js';
 import { systemPrompt } from '../config/systemPrompt.js';
+import { evaluateEmotionalState, getEmotionalPromptInjection } from './emotion/emotionEngine.js';
 import Groq from 'groq-sdk';
 import dotenv from 'dotenv';
 
@@ -181,11 +182,14 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
         const fullMemory = await getMemoryCache();
         const context = await getRelevantContext(userMessage, fullMemory);
         const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+        
+        // 1. Fetch J's Digital Hormones
+        const emotionalState = await getEmotionalPromptInjection();
 
         const messages = [
             { 
                 role: 'system', 
-                content: `${systemPrompt}\n\n[TIME]: ${time}\n[DATA]: ${context}\n\nINSTRUCTION: Output JSON exactly like this: {"internal_monologue": "your private thoughts here", "final_response": "your actual reply to Boss"}` 
+                content: `${systemPrompt}\n\n${emotionalState}\n\n[TIME]: ${time}\n[DATA]: ${context}\n\nINSTRUCTION: Output JSON exactly like this: {"internal_monologue": "your private thoughts here", "final_response": "your actual reply to Boss"}` 
             },
             ...fullMemory.history.slice(-6).map(m => ({ role: m.role, content: m.content })),
             { role: 'user', content: userMessage }
@@ -222,6 +226,9 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
 
         // SILENTLY TRIGGER REAL BACKEND ACTIONS (Reminders, Facts, Emails)
         executeBackgroundActions(userMessage, response, fullMemory.profile).catch(e => console.error(e));
+        
+        // UPDATE DIGITAL HORMONES BASED ON THIS INTERACTION
+        evaluateEmotionalState(userMessage, response).catch(e => console.error(e));
 
         return response;
     } catch (error) {
