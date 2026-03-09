@@ -152,34 +152,45 @@ export const checkSearchNeeded = async (userMessage) => {
 export const getRelevantContext = async (userMessage, memory) => {
     try {
         const client = getClient();
+        const lowerMsg = userMessage.toLowerCase();
         const availableDocs = memory.pdfExtractions.map(d => ({ id: d.id, filename: d.filename }));
         const availableNotes = (memory.notes || []).slice(0, 20).map(n => ({ id: n.id, text: n.text.substring(0, 50) }));
+
+        // FORCE PDF LOAD if user mentions schedule-related keywords
+        const forcePDF = lowerMsg.includes("schedule") || lowerMsg.includes("lecture") || lowerMsg.includes("time table") || lowerMsg.includes("pdf") || lowerMsg.includes("test") || lowerMsg.includes("exam") || lowerMsg.includes("d3") || lowerMsg.includes("batch");
 
         const selection = await client.chat.completions.create({
             messages: [
                 { 
                     role: 'system', 
-                    content: `You are a context-retrieval engine. Analyze the user's message and identify which documents or notes are relevant. 
+                    content: `You are a high-level Context-Retrieval Engine. Analyze the user's message and identify which documents or notes are relevant. 
                     Available Docs: ${JSON.stringify(availableDocs)}
                     Available Notes: ${JSON.stringify(availableNotes)}
-                    Return JSON: {"docIds": [], "noteIds": []}. Only include IDs if they are truly relevant to answering the query.` 
+                    Return JSON: {"docIds": [], "noteIds": []}. 
+                    
+                    RULE: If the user asks about a schedule, a batch (e.g., D3), a specific date, or a test, you MUST include the relevant PDF IDs.` 
                 },
                 { role: 'user', content: userMessage }
             ],
-            model: 'llama-3.1-8b-instant',
+            model: 'llama-3.3-70b-versatile', // UPGRADED TO 70B
             response_format: { type: "json_object" },
             temperature: 0.1
         });
 
-        const { docIds, noteIds } = JSON.parse(selection.choices[0].message.content);
+        let { docIds, noteIds } = JSON.parse(selection.choices[0].message.content);
         
+        // Safety Fallback: If forced or nothing found but docs exist, take the most recent doc
+        if ((forcePDF || (docIds && docIds.length === 0)) && availableDocs.length > 0) {
+            docIds = [availableDocs[0].id];
+        }
+
         const relevantDocs = memory.pdfExtractions
             .filter(d => (docIds || []).includes(d.id))
             .map(d => ({
                 filename: d.filename,
                 summary: d.summary,
                 entities: d.entities,
-                fullContent: d.fullContent // CRITICAL: Send the raw text for re-analysis
+                fullContent: d.fullContent 
             }));
             
         const relevantNotes = (memory.notes || []).filter(n => (noteIds || []).includes(n.id));

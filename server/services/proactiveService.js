@@ -13,6 +13,23 @@ let isJournalingInProgress = false;
 let userRequestedJournaling = false;
 
 /**
+ * Helper to get time-appropriate greeting in Asia/Kolkata
+ */
+const getGreetingByTime = () => {
+    const hour = new Date().toLocaleString('en-IN', { 
+        timeZone: 'Asia/Kolkata', 
+        hour: 'numeric', 
+        hour12: false 
+    });
+    const h = parseInt(hour);
+    if (h >= 5 && h < 12) return "Good morning";
+    if (h >= 12 && h < 17) return "Good afternoon";
+    if (h >= 17 && h < 22) return "Good evening";
+    if (h >= 22 || h < 2) return "Up late?";
+    return "Burning the midnight oil?";
+};
+
+/**
  * Manually sets a flag for the brain to write the journal now.
  */
 export const manualTriggerJournaling = () => {
@@ -25,6 +42,7 @@ export const manualTriggerJournaling = () => {
 export const checkProactiveNeeds = async (io) => {
     const now = new Date();
     const todayDate = now.toISOString().split('T')[0];
+    const greeting = getGreetingByTime();
 
     const memory = await getMemoryCache();
     const stats = await getRelationshipStats();
@@ -48,6 +66,8 @@ export const checkProactiveNeeds = async (io) => {
             
             [INTERNAL THOUGHT PROCESS]
             You are deciding your proactive action. 
+            The current time suggests a greeting like: "${greeting}".
+            
             Rules:
             - If "User Requested Journaling" is YES, you MUST choose "JOURNALING".
             - If it is after 10 PM and today's journal is NOT written, choose "JOURNALING".
@@ -66,7 +86,7 @@ export const checkProactiveNeeds = async (io) => {
             {
                 "decision": "MORNING_REFLECT" | "MORNING_BRIEFING" | "EVENING_REFLECTION" | "SHARE_THOUGHT" | "CHECK_REMINDERS" | "DAYDREAM" | "CURIOSITY" | "JOURNALING" | "SILENCE",
                 "reasoning": "string",
-                "message": "string (The message to send if any)",
+                "message": "string (The message to send if any. Use the greeting '${greeting}' if starting a conversation)",
                 "personalityTone": "string"
             }
 
@@ -192,6 +212,8 @@ export const generateInitialGreeting = async () => {
         const memory = await getMemoryCache();
         const stats = await getRelationshipStats();
         const lastMsg = memory.history[memory.history.length - 1];
+        const greeting = getGreetingByTime();
+
         if (lastMsg) {
             const diffInHours = (new Date().getTime() - new Date(lastMsg.timestamp).getTime()) / (1000 * 60 * 60);
             if (diffInHours < 1) return null;
@@ -199,6 +221,7 @@ export const generateInitialGreeting = async () => {
             const prompt = `
                 ${systemPrompt}
                 Greet Boss after ${diffInHours.toFixed(1)} hours. 
+                Use the greeting: "${greeting}".
                 
                 [SITUATION]
                 - Recent Notes: ${JSON.stringify(memory.notes.slice(0, 3))}
@@ -218,7 +241,7 @@ export const generateInitialGreeting = async () => {
             });
             return JSON.parse(completion.choices[0].message.content).greeting;
         }
-        return "Hello Boss! I'm J. Ready for a productive day? 😊";
+        return `${greeting}, Boss! I'm J. Ready for a productive day? 😊`;
     } catch (err) {
         return null;
     }
