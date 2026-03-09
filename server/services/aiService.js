@@ -66,7 +66,6 @@ export const executeWithFailover = async (params, allowModelFallback = true) => 
                 currentKeyIndex = (currentKeyIndex + 1) % totalKeys;
                 attempts++;
                 if (attempts >= totalKeys && modelIs70B && allowModelFallback) {
-                    console.warn("[J Brain] 70B Exhausted. Switching to 8B Safety Net...");
                     params.model = "llama-3.1-8b-instant";
                     modelIs70B = false;
                 }
@@ -81,16 +80,29 @@ export const executeWithFailover = async (params, allowModelFallback = true) => 
 
 export const getRelevantContext = async (userMessage, memory) => {
     const lowerMsg = userMessage.toLowerCase();
-    const hasPDFKeyword = lowerMsg.match(/pdf|schedule|d3|batch|lecture|timetable|calendar/);
+    const hasPDFKeyword = lowerMsg.match(/pdf|schedule|batch|lecture|timetable|calendar/);
+    
+    let context = "";
+
+    // 1. PDF Context
     if (hasPDFKeyword && memory.pdfExtractions?.length > 0) {
         const doc = memory.pdfExtractions[0];
-        return `[DOCUMENT: ${doc.filename}]\n${doc.fullContent?.substring(0, 8000) || ""}`;
+        context += `\n[DOCUMENT: ${doc.filename}]\n${doc.fullContent?.substring(0, 8000) || ""}\n`;
     }
+    
+    // 2. Journal Context
     if (lowerMsg.includes("journal") || lowerMsg.includes("diary")) {
         const journals = await getRecentJournals(1);
-        if (journals.length > 0) return `[YOUR PRIVATE DIARY ENTRY]: ${journals[0].date} - ${journals[0].content}`;
+        if (journals.length > 0) context += `\n[YOUR PRIVATE DIARY ENTRY]: ${journals[0].content}\n`;
     }
-    return "No specific documents loaded.";
+
+    // 3. MASTER KNOWLEDGE
+    const { longTermFacts } = await getAssociativeContext();
+    if (longTermFacts.length > 0) {
+        context += `\n[LEARNED MASTER KNOWLEDGE]\n${longTermFacts.map(f => `- ${f.fact}`).join('\n')}\n`;
+    }
+
+    return context || "No specific data loaded.";
 };
 
 /**
@@ -105,15 +117,6 @@ const executeBackgroundActions = async (userMessage, jResponse, fullMemory) => {
         Current Profile: ${JSON.stringify(fullMemory.profile)}
         Pending Upgrade Available: ${lastProposedUpgrade ? 'YES' : 'NO'}
         
-        [RULES]
-        1. send_journal_email: true if Boss asked for journal/diary.
-        2. send_generic_email: if Boss asked to send a specific message.
-        3. update_profile: if Boss provided a new name, email, or preference.
-        4. propose_self_upgrade: true if J mentioned studying her own code or proposing a new feature.
-        5. apply_pending_upgrade: true ONLY if Boss said "Yes", "Go ahead", or "Apply it" to a proposal.
-        6. facts_to_remember: extract explicit facts.
-        7. reminders_to_set: extract reminders.
-
         Return JSON:
         {
             "send_journal_email": boolean,
@@ -144,35 +147,42 @@ const executeBackgroundActions = async (userMessage, jResponse, fullMemory) => {
 
         // 2. SELF-MODIFICATION ENGINE
         if (actions.propose_self_upgrade) {
-            console.log("[J Action] J is studying her own code...");
             const proposal = await proposeSelfImprovement();
-            if (proposal) {
-                lastProposedUpgrade = proposal;
-                console.log(`[J Action] Proposal generated: ${proposal.featureName}`);
-            }
+            if (proposal) lastProposedUpgrade = proposal;
         }
 
         if (actions.apply_pending_upgrade && lastProposedUpgrade) {
-            console.log("[J Action] Applying self-modification...");
             const result = await applySelfImprovement(lastProposedUpgrade);
-            if (result.success) {
-                lastProposedUpgrade = null;
-                console.log("[J Action] SELF-UPGRADE SUCCESSFUL.");
-            }
+            if (result.success) lastProposedUpgrade = null;
         }
 
         // 3. WRITE JOURNAL
-        if (actions.write_journal_now) await processJournaling(today);
+        if (actions.write_journal_now) {
+            console.log("[J Action] Writing journal...");
+            await processJournaling(today);
+        }
         
         // 4. SEND JOURNAL
         if (actions.send_journal_email) {
+            console.log("[J Action] Sending journal email...");
             const journals = await getRecentJournals(1);
-            if (journals.length > 0) await sendJournalEmail(journals[0].date, journals[0].content, journals[0].mood_tone);
+            if (journals.length > 0) {
+                const j = journals[0];
+                await sendJournalEmail(j.date, j.content, j.mood_tone);
+            }
         }
 
         // 5. SEND GENERIC EMAIL
         if (actions.send_generic_email?.requested) {
-            await sendEmailNotification(actions.send_generic_email.subject, actions.send_generic_email.body, `<div>${actions.send_generic_email.body}</div>`, "general");
+            console.log(`[J Action] Sending requested email: ${actions.send_generic_email.subject}`);
+            await sendEmailNotification(
+                actions.send_generic_email.subject || "Message from J Secretary",
+                actions.send_generic_email.body || "Hi Boss!",
+                `<div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 8px;">
+                    <p style="font-size: 16px; color: #333;">${actions.send_generic_email.body}</p>
+                </div>`,
+                "general"
+            );
         }
 
         // 6. FACTS & REMINDERS
@@ -232,9 +242,9 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
 
         const result = JSON.parse(completion.choices[0].message.content);
         const response = result.final_response || "I am processing that, Boss.";
-        const thought = result.internal_monologue || "Analyzing...";
+        const internalThought = result.internal_monologue || "Analyzing...";
 
-        await saveInternalThought(thought, "scratchpad");
+        await saveInternalThought(internalThought, "scratchpad");
 
         if (onChunk && response) {
             for (const chunk of response.split(' ')) {

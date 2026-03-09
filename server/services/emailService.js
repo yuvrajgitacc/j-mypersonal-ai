@@ -130,7 +130,7 @@ export const checkSpecificReminders = async (io) => {
             const reminderTime = new Date(reminder.time);
             if (!reminder.sent && reminderTime <= now) {
                 const subject = `Reminder: ${reminder.event} 🔔`;
-                const notificationMsg = `Hey Yuvraj! It's time for: ${reminder.event} 🔔. Don't forget!`;
+                const notificationMsg = `Hey ${memory.profile.name}! It's time for: ${reminder.event} 🔔. Don't forget!`;
 
                 // 1. Send Phone Notification (CRITICAL for "Proactive" feel)
                 await sendNotificationToCenter("J Reminder", notificationMsg, "reminder");
