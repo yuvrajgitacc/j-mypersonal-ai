@@ -200,3 +200,27 @@ export const extractPDFInfo = async (text) => {
         return JSON.parse(completion.choices[0].message.content);
     } catch (err) { return { summary: "Failed", entities: [], actionItems: [] }; }
 };
+
+export const scanForUpcomingEvents = async (memory) => {
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        const context = JSON.stringify({
+            docs: (memory.pdfExtractions || []).map(d => ({ filename: d.filename, summary: d.summary }))
+        });
+
+        const completion = await executeWithFailover({
+            messages: [
+                { role: 'system', content: `Today is ${today}. Scan for events in the next 48 hours. Return JSON array: [{"event": "string", "relevance": "string"}]` },
+                { role: 'user', content: `Context: ${context}` }
+            ],
+            model: 'llama-3.3-70b-versatile',
+            response_format: { type: "json_object" },
+            temperature: 0.1
+        });
+        const result = JSON.parse(completion.choices[0].message.content);
+        return Array.isArray(result) ? result : (result.events || []);
+    } catch (err) {
+        console.error("Scan Error:", err);
+        return [];
+    }
+};
