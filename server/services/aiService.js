@@ -43,24 +43,35 @@ let currentClientIndex = 0;
 
 /**
  * Executes a Groq request with automatic failover across all available keys.
+ * FIXED: Ensures "json" is always present in the messages to satisfy Groq's strict requirements.
  */
 const executeWithFailover = async (params) => {
     let attempts = 0;
+    
+    // ENSURE JSON IS IN THE MESSAGES (Groq Strict Requirement)
+    if (params.response_format?.type === "json_object") {
+        const lastMsg = params.messages[params.messages.length - 1];
+        if (!lastMsg.content.toLowerCase().includes("json")) {
+            lastMsg.content += " (Respond in JSON format)";
+        }
+    }
+
     while (attempts < clients.length) {
         try {
             const client = clients[currentClientIndex];
             return await client.chat.completions.create(params);
         } catch (error) {
             console.error(`[Groq API] Error on Key ${currentClientIndex + 1}:`, error.message);
+            
+            // Handle Rate Limits (429) or Server Errors (500-599)
             if (error.status === 429 || (error.status >= 500 && error.status <= 599)) {
-                // Rotate to next key
                 currentClientIndex = (currentClientIndex + 1) % clients.length;
                 attempts++;
                 if (attempts < clients.length) {
                     console.log(`[Groq API] Failover: Rotating to Key ${currentClientIndex + 1}...`);
                 }
             } else {
-                throw error; // Rethrow if it's not a rate limit or server error
+                throw error; // Rethrow 400 errors (formatting) immediately to debug
             }
         }
     }
@@ -68,7 +79,7 @@ const executeWithFailover = async (params) => {
 };
 
 /**
- * NEW: Internal Thought & Diary Injector
+ * Internal Thought & Diary Injector
  */
 export const getInternalThoughtsContext = async (userMessage) => {
     const lowerMsg = userMessage.toLowerCase();
@@ -93,7 +104,7 @@ export const getInternalThoughtsContext = async (userMessage) => {
 };
 
 /**
- * NEW: Associative Memory Linker
+ * Associative Memory Linker
  */
 export const findAssociativeLinks = async (userMessage) => {
     try {
@@ -103,12 +114,9 @@ export const findAssociativeLinks = async (userMessage) => {
         const prompt = `
             You are J's associative memory module. 
             User's Current Message: "${userMessage}"
-            Past History (Summarized): ${JSON.stringify(context.recentHistory.slice(-15))}
-            Past Long-Term Facts: ${JSON.stringify(context.longTermFacts)}
-            Recent Notes: ${JSON.stringify(context.recentNotes)}
-            Deep Memory (Idea Graph): ${JSON.stringify(ideaGraph)}
-            Task: Identify if there is a meaningful link between current message and past memory.
-            Return JSON: {"linkFound": true, "connection": "description", "pastContext": "what remembered"}.
+            Past History: ${JSON.stringify(context.recentHistory.slice(-15))}
+            Past Facts: ${JSON.stringify(context.longTermFacts)}
+            Task: Identify a meaningful link. Return JSON: {"linkFound": true, "connection": "str"}.
         `;
 
         const completion = await executeWithFailover({
@@ -136,7 +144,8 @@ export const checkSearchNeeded = async (userMessage) => {
     try {
         const completion = await executeWithFailover({
             messages: [
-                { role: 'system', content: 'Determine if up-to-date web search is needed. Return JSON: {"needsSearch": true/false, "query": "..."}.' }
+                { role: 'system', content: 'Does this need a web search? Return JSON: {"needsSearch": true/false, "query": "str"}.' },
+                { role: 'user', content: userMessage }
             ],
             model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" },
@@ -158,7 +167,8 @@ export const getRelevantContext = async (userMessage, memory) => {
 
         const selection = await executeWithFailover({
             messages: [
-                { role: 'system', content: `Identify relevant context IDs. Docs: ${JSON.stringify(availableDocs)}. Notes: ${JSON.stringify(availableNotes)}. Return JSON: {"docIds": [], "noteIds": []}.` }
+                { role: 'system', content: `Identify relevant context IDs. Docs: ${JSON.stringify(availableDocs)}. Return JSON: {"docIds": [], "noteIds": []}.` },
+                { role: 'user', content: userMessage }
             ],
             model: 'llama-3.3-70b-versatile',
             response_format: { type: "json_object" },
@@ -189,7 +199,7 @@ export const getRelevantContext = async (userMessage, memory) => {
 
 export const performInternalReview = async (userMessage, context, draftResponse) => {
     try {
-        const reviewPrompt = `Audit the draft response against real context data. Context: ${context}. User: ${userMessage}. Draft: ${draftResponse}. Return JSON: {"status": "PASS"/"FAIL", "critique": "...", "fix_instructions": "..."}.`;
+        const reviewPrompt = `Audit the draft. Context: ${context.substring(0, 5000)}. User: ${userMessage}. Draft: ${draftResponse}. Return JSON: {"status": "PASS"/"FAIL", "critique": "str", "fix_instructions": "str"}.`;
         const completion = await executeWithFailover({
             messages: [{ role: 'system', content: reviewPrompt }],
             model: 'llama-3.3-70b-versatile',
@@ -266,7 +276,7 @@ ${secretThoughts}
           const correctionPrompt = [
               ...messages,
               { role: 'assistant', content: JSON.stringify(result) },
-              { role: 'system', content: `ERROR: ${review.critique}. Rewrite with 100% accuracy.` }
+              { role: 'system', content: `ERROR: ${review.critique}. Rewrite correctly in JSON.` }
           ];
           const secondChance = await executeWithFailover({
             messages: correctionPrompt,
@@ -296,7 +306,7 @@ ${secretThoughts}
       if (finalResponse.length > 50) {
           try {
               const factDistiller = await executeWithFailover({
-                  messages: [{ role: 'system', content: 'Extract new facts. Return JSON: {"fact": "str", "category": "str"}.' }, { role: 'user', content: `User: ${userMessage}\nJ: ${finalResponse}` }],
+                  messages: [{ role: 'system', content: 'Extract facts in JSON: {"fact": "str", "category": "str"}.' }, { role: 'user', content: `User: ${userMessage}\nJ: ${finalResponse}` }],
                   model: 'llama-3.3-70b-versatile',
                   response_format: { type: "json_object" }
               });
@@ -315,12 +325,12 @@ ${secretThoughts}
       if (lowerMsg.includes("remind") || lowerMsg.includes("tomorrow")) {
         try {
             const timeExtraction = await executeWithFailover({
-                messages: [{ role: 'system', content: `Extract time. Current: ${currentTime}. Return JSON: {"event": "str", "time": "ISO", "confidence": 0-1}` }, { role: 'user', content: `User: ${userMessage}\nJ: ${finalResponse}` }],
+                messages: [{ role: 'system', content: `Extract time. Return JSON: {"event": "str", "time": "ISO"}. Current: ${currentTime}` }, { role: 'user', content: `User: ${userMessage}\nJ: ${finalResponse}` }],
                 model: 'llama-3.3-70b-versatile',
                 response_format: { type: "json_object" }
             });
             const rData = JSON.parse(timeExtraction.choices[0].message.content);
-            if (rData.time && rData.confidence > 0.8) {
+            if (rData.time) {
                 await saveReminder(rData.event, rData.time);
                 if (onReminderSaved) onReminderSaved(rData);
             }
@@ -337,7 +347,7 @@ ${secretThoughts}
 export const extractPDFInfo = async (text) => {
     try {
         const completion = await executeWithFailover({
-            messages: [{ role: 'system', content: `Analyze PDF text. Extract events with dates. Return JSON: {"summary": "...", "entities": [], "actionItems": []}.` }, { role: 'user', content: text.substring(0, 30000) }],
+            messages: [{ role: 'system', content: `Analyze PDF. Extract events in JSON: {"summary": "str", "entities": []}.` }, { role: 'user', content: text.substring(0, 30000) }],
             model: 'llama-3.3-70b-versatile',
             response_format: { type: "json_object" },
             temperature: 0.1
