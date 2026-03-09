@@ -27,7 +27,6 @@ const sentimentAnalysis = new Sentiment();
 import dotenv from 'dotenv';
 dotenv.config();
 
-// Load all 6 keys
 const groqKeys = [
     process.env.GROQ_API_KEY_1,
     process.env.GROQ_API_KEY_2,
@@ -41,13 +40,12 @@ const clients = groqKeys.length > 0 ? groqKeys.map(k => new Groq({ apiKey: k }))
 let currentClientIndex = 0;
 
 /**
- * Robust Failover Executor with Automatic Model Fallback
+ * Robust Failover Executor with Zero-Latency Safety Net
  */
 const executeWithFailover = async (params, allowModelFallback = true) => {
     let attempts = 0;
     let originalModel = params.model;
     
-    // Ensure JSON keyword is present for Groq JSON mode
     if (params.response_format?.type === "json_object") {
         const lastMsg = params.messages[params.messages.length - 1];
         if (!lastMsg.content.toLowerCase().includes("json")) {
@@ -55,55 +53,34 @@ const executeWithFailover = async (params, allowModelFallback = true) => {
         }
     }
 
-    while (attempts < clients.length * 2) { // Try all keys twice (once for 70B, once for 8B if needed)
+    while (attempts < clients.length * 2) {
         try {
             const client = clients[currentClientIndex];
             return await client.chat.completions.create(params);
         } catch (error) {
-            console.warn(`[Groq API] Key ${currentClientIndex + 1} (${params.model}) Error:`, error.message);
-            
             if (error.status === 429 || error.status === 503 || (error.status >= 500 && error.status <= 599)) {
                 currentClientIndex = (currentClientIndex + 1) % clients.length;
                 attempts++;
-
-                // If we've tried all keys and we're on 70B, fallback to 8B and try again
-                if (attempts === clients.length && allowModelFallback && originalModel.includes("70b")) {
-                    console.log(`[Groq API] CRITICAL: 70B Limited. Falling back to 8B Safety Net...`);
+                if (attempts >= clients.length && allowModelFallback && originalModel.includes("70b")) {
+                    console.log(`[J Brain] 70B Exhausted. Switching to 8B Safety Net for 100% uptime.`);
                     params.model = "llama-3.1-8b-instant";
-                    // Reset attempt counter for the fallback model sweep
                 }
-                
-                await new Promise(r => setTimeout(r, 200));
-            } else {
-                throw error;
+                continue;
             }
+            throw error;
         }
     }
-    throw new Error(`All Groq keys and fallback models failed.`);
-};
-
-export const findAssociativeLinks = async (userMessage) => {
-    try {
-        const context = await getAssociativeContext();
-        const prompt = `Identify links in JSON: {"linkFound": bool, "connection": "str"}. Context: ${JSON.stringify(context.longTermFacts)}`;
-        const completion = await executeWithFailover({
-            messages: [{ role: 'system', content: prompt }],
-            model: 'llama-3.1-8b-instant',
-            response_format: { type: "json_object" },
-            temperature: 0.3
-        });
-        return JSON.parse(completion.choices[0].message.content);
-    } catch (err) { return { linkFound: false }; }
+    throw new Error(`All keys and fallback models exhausted.`);
 };
 
 export const getRelevantContext = async (userMessage, memory) => {
     try {
         const lowerMsg = userMessage.toLowerCase();
         const availableDocs = memory.pdfExtractions.map(d => ({ id: d.id, filename: d.filename }));
-        const forcePDF = lowerMsg.includes("schedule") || lowerMsg.includes("lecture") || lowerMsg.includes("d3") || lowerMsg.includes("batch") || lowerMsg.includes("pdf");
+        const forcePDF = lowerMsg.includes("schedule") || lowerMsg.includes("lecture") || lowerMsg.includes("d3") || lowerMsg.includes("batch") || lowerMsg.includes("pdf") || lowerMsg.includes("test");
         
         const selection = await executeWithFailover({
-            messages: [{ role: 'system', content: `Select relevant doc IDs in JSON: {"docIds": []}. Docs: ${JSON.stringify(availableDocs)}` }, { role: 'user', content: userMessage }],
+            messages: [{ role: 'system', content: `Identify relevant doc IDs. JSON: {"docIds": []}. Docs: ${JSON.stringify(availableDocs)}` }, { role: 'user', content: userMessage }],
             model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" },
             temperature: 0.1
@@ -111,16 +88,15 @@ export const getRelevantContext = async (userMessage, memory) => {
         
         let { docIds } = JSON.parse(selection.choices[0].message.content);
         if (forcePDF && availableDocs.length > 0 && (!docIds || docIds.length === 0)) docIds = [availableDocs[0].id];
-        
         const relevantDocs = memory.pdfExtractions.filter(d => (docIds || []).includes(d.id)).map(d => ({ filename: d.filename, summary: d.summary, fullContent: d.fullContent }));
-        return { docs: relevantDocs, notes: [], profile: memory.profile };
-    } catch (err) { return { docs: [], notes: [], profile: memory.profile }; }
+        return { docs: relevantDocs, profile: memory.profile };
+    } catch (err) { return { docs: [], profile: memory.profile }; }
 };
 
 export const performInternalReview = async (userMessage, context, draftResponse) => {
     try {
-        if (!draftResponse || draftResponse.length < 5) return { status: "PASS", critique: "" };
-        const prompt = `Audit draft for hallucinations or logic errors ONLY. Tone doesn't matter. JSON: {"status": "PASS"/"FAIL", "critique": "str"}. Draft: ${draftResponse}`;
+        if (!draftResponse) return { status: "PASS", critique: "" };
+        const prompt = `You are a Logic Auditor. ONLY fail if J made a factual error or hallucinated data. IGNORE tone, politeness, or length. JSON: {"status": "PASS"/"FAIL", "critique": "str"}. Draft: ${draftResponse}`;
         const completion = await executeWithFailover({
             messages: [{ role: 'system', content: prompt }],
             model: 'llama-3.1-8b-instant',
@@ -135,16 +111,16 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
   try {
       const fullMemory = await getMemoryCache();
       const relevantContext = await getRelevantContext(userMessage, fullMemory);
-      const memoryContext = `Context: ${JSON.stringify(relevantContext.docs)}`;
+      const memoryContext = `Context Data: ${JSON.stringify(relevantContext.docs)}`;
       const currentTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
       
       const messages = [
-        { role: 'system', content: `${systemPrompt}\nTime: ${currentTime}\n${memoryContext}` },
+        { role: 'system', content: `${systemPrompt}\n[DATA]: ${memoryContext}\nTime: ${currentTime}` },
         ...fullMemory.history.slice(-8).map(m => ({ role: m.role, content: m.content })),
         { role: 'user', content: userMessage }
       ];
 
-      console.log("[J Brain] Thinking...");
+      console.log("[J Brain] Processing...");
       const completion = await executeWithFailover({ 
           messages, 
           model: 'llama-3.3-70b-versatile', 
@@ -153,45 +129,55 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
       });
 
       const result = JSON.parse(completion.choices[0].message.content);
-      const internalThought = result.internal_monologue || "Analyzing...";
-      const finalResponse = result.final_response || "I'm ready to assist you, Boss.";
+      let internalThought = result.internal_monologue || "Analyzing user intent...";
+      let finalResponse = result.final_response;
 
-      console.log("[J Brain] Reviewing...");
+      // CRITICAL: Force 8B to generate a REAL response if 70B gave us nothing
+      if (!finalResponse || finalResponse.length < 2) {
+          console.log("[J Brain] 70B failed to produce a response. Forcing 8B recovery...");
+          const rescue = await executeWithFailover({
+              messages,
+              model: 'llama-3.1-8b-instant',
+              response_format: { type: "json_object" },
+              temperature: 0.7
+          });
+          const rescueResult = JSON.parse(rescue.choices[0].message.content);
+          finalResponse = rescueResult.final_response;
+          internalThought = rescueResult.internal_monologue;
+      }
+
+      console.log("[J Brain] Auditing...");
       const review = await performInternalReview(userMessage, memoryContext, finalResponse);
       
-      let verifiedResponse = finalResponse;
       if (review.status === "FAIL") {
-          console.log(`[J Critic Audit]: FAIL - ${review.critique}`);
           const secondChance = await executeWithFailover({
-            messages: [...messages, { role: 'assistant', content: JSON.stringify(result) }, { role: 'system', content: `Fix logic error: ${review.critique}. Use JSON.` }],
+            messages: [...messages, { role: 'assistant', content: JSON.stringify(result) }, { role: 'system', content: `FACTUAL ERROR: ${review.critique}. Fix logic in JSON.` }],
             model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" }, 
-            temperature: 0.3
+            temperature: 0.1
           });
           const fixed = JSON.parse(secondChance.choices[0].message.content);
-          verifiedResponse = fixed.final_response || finalResponse;
+          finalResponse = fixed.final_response || finalResponse;
       }
 
-      if (internalThought && internalThought !== "undefined") {
-          await saveInternalThought(internalThought, "scratchpad");
-      }
-
-      if (onChunk && verifiedResponse) {
-          for (const chunk of verifiedResponse.split(' ')) {
+      if (internalThought) await saveInternalThought(internalThought, "scratchpad");
+      
+      if (onChunk && finalResponse) {
+          for (const chunk of finalResponse.split(' ')) {
               onChunk(chunk + ' ');
-              await new Promise(r => setTimeout(r, 15));
+              await new Promise(r => setTimeout(r, 10));
           }
       }
 
-      if (verifiedResponse) {
+      if (finalResponse) {
           await appendToHistory('user', userMessage);
-          await appendToHistory('assistant', verifiedResponse);
+          await appendToHistory('assistant', finalResponse);
       }
 
-      return verifiedResponse;
+      return finalResponse;
   } catch (error) {
-      console.error(`AI Fatal Error:`, error.message);
-      const msg = "I'm having a brief moment of clarity, Boss. Let's continue.";
+      console.error(`AI Critical Error:`, error.message);
+      const msg = "I'm here, Boss. Just taking a deep breath. How can I help?";
       if (onChunk) onChunk(msg);
       return msg;
   }
@@ -200,13 +186,13 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
 export const extractPDFInfo = async (text) => {
     try {
         const completion = await executeWithFailover({
-            messages: [{ role: 'system', content: `Analyze PDF in JSON: {"summary": "str", "entities": []}.` }, { role: 'user', content: text.substring(0, 20000) }],
+            messages: [{ role: 'system', content: `Analyze PDF. Extract dates/events. JSON: {"summary": "str", "entities": []}.` }, { role: 'user', content: text.substring(0, 20000) }],
             model: 'llama-3.3-70b-versatile',
             response_format: { type: "json_object" },
             temperature: 0.1
         });
         return JSON.parse(completion.choices[0].message.content);
-    } catch (err) { return { summary: "Extraction failed", entities: [] }; }
+    } catch (err) { return { summary: "Failed", entities: [] }; }
 };
 
 export const scanForUpcomingEvents = async (memory) => {
@@ -214,7 +200,7 @@ export const scanForUpcomingEvents = async (memory) => {
         const today = new Date().toISOString().split('T')[0];
         const context = JSON.stringify({ docs: (memory.pdfExtractions || []).slice(0, 2) });
         const completion = await executeWithFailover({
-            messages: [{ role: 'system', content: `Upcoming events? JSON: [{"event": "str"}]. Today: ${today}` }, { role: 'user', content: `Context: ${context}` }],
+            messages: [{ role: 'system', content: `Events in 48h? JSON: [{"event": "str"}]. Today: ${today}` }, { role: 'user', content: `Context: ${context}` }],
             model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" },
             temperature: 0.1
