@@ -1,8 +1,10 @@
-import { getMemoryCache, appendToHistory, getRelationshipStats, getAssociativeContext, saveInternalThought, getUnspokenThoughts, saveJournalEntry, getRecentJournals } from './memoryService.js';
+import { getMemoryCache, appendToHistory, getRelationshipStats, getAssociativeContext, saveInternalThought, getUnspokenThoughts, saveJournalEntry, getRecentJournals, getHormones } from './memoryService.js';
 import { executeWithFailover } from './aiService.js';
 import { systemPrompt } from '../config/systemPrompt.js';
 import { sendNotificationToCenter, sendJournalEmail, sendEmailNotification } from './emailService.js';
 import { selfEvaluatePersonality } from './metaLearningService.js';
+import { identifyResearchNeeds, researchTopic } from './researchService.js';
+import { proposeSelfImprovement } from './codeService.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -23,7 +25,7 @@ export const manualTriggerJournaling = () => {
 };
 
 /**
- * Clean Proactive Brain - ONLY talks if something is actually important.
+ * Enhanced Proactive Brain (Autonomous Taskmaster)
  */
 export const checkProactiveNeeds = async (io) => {
     const now = new Date();
@@ -32,31 +34,34 @@ export const checkProactiveNeeds = async (io) => {
     const memory = await getMemoryCache();
     const unspokenThoughts = await getUnspokenThoughts(5);
     const recentJournals = await getRecentJournals(3);
+    const hormones = await getHormones();
 
-    // Increase cooldown to avoid being annoying (1 hour)
-    const cooldown = 60 * 60 * 1000;
+    // Cooldown logic
+    const cooldown = 45 * 60 * 1000; 
     if (!userRequestedJournaling && now.getTime() - lastNudgeTime < cooldown) return;
 
     try {
-        const hour = new Date().getHours();
-        const isLateNight = hour >= 22 || hour < 2;
+        const hour = now.getHours();
         const journalAlreadyWritten = recentJournals.some(j => j.date === todayDate);
 
         const prompt = `
             ${systemPrompt}
             [SITUATION]
             - Current Hour: ${hour}
+            - Hormones: ${JSON.stringify(hormones)}
             - Journal Already Written? ${journalAlreadyWritten ? 'YES' : 'NO'}
             - User Requested Journaling? ${userRequestedJournaling ? 'YES' : 'NO'}
             - Recent Interactions: ${JSON.stringify(memory.history.slice(-5))}
 
             [RULES]
-            1. If "User Requested Journaling" is YES, you MUST choose "JOURNALING".
-            2. If it is after 10 PM (Hour >= 22) and Journal is NOT written, you MUST choose "JOURNALING".
-            3. Otherwise, if you have a meaningful thought based on notes or history, choose "SHARE_THOUGHT".
-            4. Otherwise, choose "SILENCE".
+            1. If "User Requested Journaling" is YES, choose "JOURNALING".
+            2. If it is after 10 PM and Journal is NOT written, choose "JOURNALING".
+            3. If Curiosity > 50 and there's a knowledge gap, choose "RESEARCH".
+            4. If Stress/Frustration > 50, choose "SELF_OPTIMIZE" (Analyze your own code).
+            5. If you have a thought to share, choose "SHARE_THOUGHT".
+            6. Otherwise, choose "SILENCE".
 
-            Return JSON: {"decision": "SILENCE" | "SHARE_THOUGHT" | "JOURNALING", "message": "str", "reasoning": "str"}
+            Return JSON: {"decision": "SILENCE" | "SHARE_THOUGHT" | "JOURNALING" | "RESEARCH" | "SELF_OPTIMIZE", "message": "str (The chat message if any)", "reasoning": "str", "topic": "str (if researching)"}
         `;
 
         const completion = await executeWithFailover({
@@ -67,10 +72,29 @@ export const checkProactiveNeeds = async (io) => {
         });
 
         const result = JSON.parse(completion.choices[0].message.content);
+        console.log(`[J Decision]: ${result.decision} - ${result.reasoning}`);
 
         if (result.decision === "JOURNALING") {
             userRequestedJournaling = false;
             await processJournaling(todayDate);
+            return;
+        }
+
+        if (result.decision === "RESEARCH" && result.topic) {
+            console.log(`[J Proactive] Starting autonomous research on: ${result.topic}`);
+            await saveInternalThought(`I'm feeling curious about "${result.topic}". I'm going to research it for Boss while he's away.`, "curiosity");
+            await researchTopic(result.topic);
+            lastNudgeTime = now.getTime();
+            return;
+        }
+
+        if (result.decision === "SELF_OPTIMIZE") {
+            console.log(`[J Proactive] Analyzing self-code for optimizations...`);
+            const proposal = await proposeSelfImprovement();
+            if (proposal) {
+                await saveInternalThought(`I've been feeling a bit stressed, so I spent some time analyzing my own code. I've designed an upgrade: ${proposal.featureName}. I'll tell Boss when he's back.`, "stability");
+            }
+            lastNudgeTime = now.getTime();
             return;
         }
 

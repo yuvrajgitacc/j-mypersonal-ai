@@ -90,7 +90,8 @@ export const initDB = async () => {
         const baseHormones = [
             { h: 'affection', l: 50 },
             { h: 'stress', l: 10 },
-            { h: 'frustration', l: 0 }
+            { h: 'frustration', l: 0 },
+            { h: 'curiosity', l: 30 }
         ];
         for (const bh of baseHormones) {
             await execSQL('INSERT OR IGNORE INTO digital_hormones (hormone, level, last_updated) VALUES (?, ?, ?)', [bh.h, bh.l, now]);
