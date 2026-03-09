@@ -42,14 +42,14 @@ let currentClientIndex = 0;
 /**
  * Robust Failover Executor with Zero-Latency Safety Net
  */
-const executeWithFailover = async (params, allowModelFallback = true) => {
+export const executeWithFailover = async (params, allowModelFallback = true) => {
     let attempts = 0;
     let originalModel = params.model;
     
     if (params.response_format?.type === "json_object") {
         const lastMsg = params.messages[params.messages.length - 1];
         if (!lastMsg.content.toLowerCase().includes("json")) {
-            lastMsg.content += " (Respond in JSON format)";
+            lastMsg.content += " (Respond EXACTLY in JSON format)";
         }
     }
 

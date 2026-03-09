@@ -1,11 +1,9 @@
-import Groq from 'groq-sdk';
 import { db, saveLongTermFact } from './memoryService.js';
+import { executeWithFailover } from './aiService.js';
 import path from 'path';
 
 import dotenv from 'dotenv';
 dotenv.config();
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY_1 });
 
 /**
  * Monthly Cleanup:
@@ -57,7 +55,7 @@ export const runMonthlyCleanup = async () => {
                 Return JSON: {"fact": "distilled important fact", "category": "projects/personal/life"} or {"fact": null}.
             `;
 
-            const completion = await groq.chat.completions.create({
+            const completion = await executeWithFailover({
                 messages: [{ role: 'system', content: prompt }, { role: 'user', content: text.substring(0, 10000) }],
                 model: 'llama-3.1-8b-instant',
                 response_format: { type: "json_object" },

@@ -1,20 +1,15 @@
 import { getMemoryCache, appendToHistory, getRelationshipStats, getAssociativeContext, saveInternalThought, getUnspokenThoughts, markThoughtAsShared, saveJournalEntry, getRecentJournals } from './memoryService.js';
-import Groq from 'groq-sdk';
+import { executeWithFailover } from './aiService.js';
 import { systemPrompt } from '../config/systemPrompt.js';
 import { sendNotificationToCenter, sendJournalEmail, sendEmailNotification } from './emailService.js';
 
 import dotenv from 'dotenv';
 dotenv.config();
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY_1 });
-
 let lastNudgeTime = 0;
 let isJournalingInProgress = false;
 let userRequestedJournaling = false;
 
-/**
- * Helper to get time-appropriate greeting in Asia/Kolkata
- */
 const getGreetingByTime = () => {
     const hour = new Date().toLocaleString('en-IN', { 
         timeZone: 'Asia/Kolkata', 
@@ -29,16 +24,10 @@ const getGreetingByTime = () => {
     return "Burning the midnight oil?";
 };
 
-/**
- * Manually sets a flag for the brain to write the journal now.
- */
 export const manualTriggerJournaling = () => {
     userRequestedJournaling = true;
 };
 
-/**
- * The main "Brain" function that runs periodically.
- */
 export const checkProactiveNeeds = async (io) => {
     const now = new Date();
     const todayDate = now.toISOString().split('T')[0];
@@ -50,12 +39,10 @@ export const checkProactiveNeeds = async (io) => {
     const unspokenThoughts = await getUnspokenThoughts(5);
     const recentJournals = await getRecentJournals(3);
 
-    // Activity check
     const lastMsg = memory.history[memory.history.length - 1];
     const minutesSinceLastMsg = lastMsg ? (now.getTime() - new Date(lastMsg.timestamp).getTime()) / (1000 * 60) : 999;
 
-    // 1. Cooldown & Frequency Check (Increased for less annoyance)
-    const randomizedCooldown = (45 + Math.random() * 20) * 60 * 1000; // 45-65 minutes
+    const randomizedCooldown = (45 + Math.random() * 20) * 60 * 1000; 
     if (!userRequestedJournaling && now.getTime() - lastNudgeTime < randomizedCooldown) return;
 
     console.log(`[J Brain] Evaluating current moment (${now.toLocaleTimeString()})...`);
@@ -63,44 +50,33 @@ export const checkProactiveNeeds = async (io) => {
     try {
         const prompt = `
             ${systemPrompt}
-            
             [INTERNAL THOUGHT PROCESS]
             You are deciding your proactive action. 
             The current time suggests a greeting like: "${greeting}".
-            
             Rules:
             - If "User Requested Journaling" is YES, you MUST choose "JOURNALING".
             - If it is after 10 PM and today's journal is NOT written, choose "JOURNALING".
             - If away for >60 mins, you can choose "SHARE_THOUGHT" or "CURIOSITY".
-            
             [SITUATION]
-            - User Requested Journaling: ${userRequestedJournaling ? 'YES' : 'NO'}
-            - Has Today's Journal been written? ${recentJournals.some(j => j.date === todayDate) ? 'YES' : 'NO'}
-            - Recent Private Journals: ${JSON.stringify(recentJournals)}
-            - Internal Thoughts: ${JSON.stringify(unspokenThoughts)}
+            - User Requested: ${userRequestedJournaling ? 'YES' : 'NO'}
+            - Journal written? ${recentJournals.some(j => j.date === todayDate) ? 'YES' : 'NO'}
+            - Thoughts: ${JSON.stringify(unspokenThoughts)}
             - Reminders: ${JSON.stringify(memory.reminders.filter(r => !r.sent).slice(0, 3))}
-            - Recent Notes: ${JSON.stringify(memory.notes.slice(0, 5))}
-            
+            - Notes: ${JSON.stringify(memory.notes.slice(0, 5))}
             [TASK]
             Return JSON:
             {
-                "decision": "MORNING_REFLECT" | "MORNING_BRIEFING" | "EVENING_REFLECTION" | "SHARE_THOUGHT" | "CHECK_REMINDERS" | "DAYDREAM" | "CURIOSITY" | "JOURNALING" | "SILENCE",
+                "decision": "MORNING_REFLECT" | "EVENING_REFLECTION" | "SHARE_THOUGHT" | "CHECK_REMINDERS" | "DAYDREAM" | "CURIOSITY" | "JOURNALING" | "SILENCE",
                 "reasoning": "string",
-                "message": "string (The message to send if any. Use the greeting '${greeting}' if starting a conversation)",
+                "message": "string (The message to send if any)",
                 "personalityTone": "string"
             }
-
-            CRITICAL RULES:
-            - If "Reminders" is empty, DO NOT mention any meetings or schedule in the "message".
-            - If "Notes" is empty, DO NOT mention any projects in the "message".
-            - If there is nothing REAL or IMPORTANT to report, choose "SILENCE".
-            - Be very selective. Do NOT be annoying. Silence is often best.
-            - NEVER hallucinate data.
+            CRITICAL: NEVER hallucinate data. Be very selective.
         `;
 
-        const completion = await groq.chat.completions.create({
+        const completion = await executeWithFailover({
             messages: [{ role: 'system', content: prompt }],
-            model: 'llama-3.3-70b-versatile', // UPGRADED
+            model: 'llama-3.1-8b-instant', // Fallback model for background tasks
             response_format: { type: "json_object" },
             temperature: 0.6
         });
@@ -130,9 +106,6 @@ export const checkProactiveNeeds = async (io) => {
     }
 };
 
-/**
- * J writes her private diary about the day.
- */
 export async function processJournaling(date) {
     if (isJournalingInProgress) return;
     isJournalingInProgress = true;
@@ -140,18 +113,17 @@ export async function processJournaling(date) {
 
     try {
         const context = await getAssociativeContext();
-        const stats = await getRelationshipStats();
         const memory = await getMemoryCache();
 
         const prompt = `
             ${systemPrompt}
             Write your private journal for ${date}. 
-            Be personal. Reflect on Yuvraj. Record your digital feelings.
+            Reflect on Yuvraj. Record your digital feelings.
             Today's Data: ${JSON.stringify(context.recentHistory)} | Notes: ${JSON.stringify(context.recentNotes)}
             Return JSON: {"content": "diary entry", "mood_tone": "string", "learned_facts": []}
         `;
 
-        const completion = await groq.chat.completions.create({
+        const completion = await executeWithFailover({
             messages: [{ role: 'system', content: prompt }],
             model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" }
@@ -160,7 +132,6 @@ export async function processJournaling(date) {
         const res = JSON.parse(completion.choices[0].message.content);
         await saveJournalEntry(date, res.content, res.mood_tone, res.learned_facts);
         
-        // AUTO-EMAIL DIARY
         const emailSubject = `J's Secret Journal: ${date} 🌙`;
         const emailHtml = `
             <div style="font-family: 'Georgia', serif; padding: 30px; border: 1px solid #ddd; background: #fff; color: #333;">
@@ -182,9 +153,6 @@ export async function processJournaling(date) {
     }
 }
 
-/**
- * J thinks deeply about connections in the background.
- */
 export async function processDaydreaming() {
     console.log("[J Daydreaming] Connecting the dots...");
     try {
@@ -194,7 +162,7 @@ export async function processDaydreaming() {
             Find ONE hidden link between: ${JSON.stringify(context.recentNotes)} and ${JSON.stringify(context.recentHistory.slice(-20))}.
             Return JSON: {"thought": "the link", "type": "daydream"}
         `;
-        const completion = await groq.chat.completions.create({
+        const completion = await executeWithFailover({
             messages: [{ role: 'system', content: prompt }],
             model: 'llama-3.1-8b-instant',
             response_format: { type: "json_object" }
@@ -210,7 +178,6 @@ export async function processDaydreaming() {
 export const generateInitialGreeting = async () => {
     try {
         const memory = await getMemoryCache();
-        const stats = await getRelationshipStats();
         const lastMsg = memory.history[memory.history.length - 1];
         const greeting = getGreetingByTime();
 
@@ -220,20 +187,12 @@ export const generateInitialGreeting = async () => {
             
             const prompt = `
                 ${systemPrompt}
-                Greet Boss after ${diffInHours.toFixed(1)} hours. 
-                Use the greeting: "${greeting}".
-                
-                [SITUATION]
-                - Recent Notes: ${JSON.stringify(memory.notes.slice(0, 3))}
-                - Upcoming Reminders: ${JSON.stringify(memory.reminders.filter(r => !r.sent).slice(0, 2))}
-                
-                Task: Mention a note or a project briefly ONLY if they exist. 
-                If NO notes or reminders exist, just be warm and welcoming. 
-                NEVER make up a schedule or a meeting.
-                
+                Greet Boss after ${diffInHours.toFixed(1)} hours. Use: "${greeting}".
+                Notes: ${JSON.stringify(memory.notes.slice(0, 3))}
+                Reminders: ${JSON.stringify(memory.reminders.filter(r => !r.sent).slice(0, 2))}
                 Return JSON: {"greeting": "message"}
             `;
-            const completion = await groq.chat.completions.create({
+            const completion = await executeWithFailover({
                 messages: [{ role: 'system', content: prompt }],
                 model: 'llama-3.1-8b-instant',
                 response_format: { type: "json_object" },

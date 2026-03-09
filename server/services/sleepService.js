@@ -1,10 +1,8 @@
-import Groq from 'groq-sdk';
 import dotenv from 'dotenv';
 import { getMemoryCache, getAssociativeContext, saveIdeaConnection, saveInternalThought } from './memoryService.js';
+import { executeWithFailover } from './aiService.js';
 
 dotenv.config();
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY_1 });
 
 export const processSleepCycle = async () => {
     console.log("[J Sleep Cycle] Entering deep sleep. Synthesizing True Memory (Idea Graph)...");
@@ -47,7 +45,7 @@ export const processSleepCycle = async () => {
             }
         `;
 
-        const completion = await groq.chat.completions.create({
+        const completion = await executeWithFailover({
             messages: [{ role: 'system', content: prompt }],
             model: 'llama-3.1-8b-instant', // Fast and good for structured data extraction
             response_format: { type: "json_object" },
