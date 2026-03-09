@@ -9,12 +9,15 @@ import {
     getUnspokenThoughts, 
     getRecentJournals, 
     appendToHistory,
-    saveInternalThought
+    saveInternalThought,
+    getHormones,
+    getPersonalityRules
 } from './memoryService.js';
 import { sendNotificationToCenter, sendEmailNotification } from './emailService.js';
 import { processJournaling } from './proactiveService.js';
 import { systemPrompt } from '../config/systemPrompt.js';
 import { evaluateEmotionalState, getEmotionalPromptInjection } from './emotion/emotionEngine.js';
+import { identifyResearchNeeds, researchTopic } from './researchService.js';
 import Groq from 'groq-sdk';
 import dotenv from 'dotenv';
 
@@ -82,7 +85,6 @@ export const getRelevantContext = async (userMessage, memory) => {
         return `[DOCUMENT: ${doc.filename}]\n${doc.fullContent?.substring(0, 8000) || ""}`;
     }
     
-    // Also inject recent journal if asking for it
     if (lowerMsg.includes("journal") || lowerMsg.includes("diary")) {
         const journals = await getRecentJournals(1);
         if (journals.length > 0) {
@@ -95,28 +97,12 @@ export const getRelevantContext = async (userMessage, memory) => {
 
 /**
  * BACKGROUND ACTION ENGINE (The Real Secretary Logic)
- * This runs silently after J speaks. It reads the chat and executes real system commands.
  */
-const executeBackgroundActions = async (userMessage, jResponse, userProfile) => {
+const executeBackgroundActions = async (userMessage, jResponse, fullMemory) => {
     try {
         console.log("[J Action Engine] Scanning for commands...");
-        const prompt = `You are J's Action Engine. Analyze the conversation and extract real actions.
-        Boss: "${userMessage}"
-        J: "${jResponse}"
-        
-        [RULES]
-        1. send_journal_email: true if Boss asked to see/email his journal or diary (e.g. "send journal", "mail diary", "today's entry").
-        2. write_journal_now: true if Boss asked J to write/reflect now OR if he asked for today's journal and it's not likely written.
-        3. facts_to_remember: any specific personal facts or project details Boss mentioned.
-        4. reminders_to_set: specific time-based reminders.
-
-        Return JSON:
-        {
-            "send_journal_email": boolean,
-            "write_journal_now": boolean,
-            "facts_to_remember": [{"fact": "str", "category": "str"}],
-            "reminders_to_set": [{"event": "str", "time": "str"}]
-        }`;
+        const prompt = `Analyze conversation and extract actions. Boss: "${userMessage}". J: "${jResponse}". 
+        Return JSON: {"send_journal_email": bool, "write_journal_now": bool, "facts_to_remember": [], "reminders_to_set": []}`;
 
         const res = await executeWithFailover({
             messages: [{ role: 'system', content: prompt }],
@@ -128,54 +114,36 @@ const executeBackgroundActions = async (userMessage, jResponse, userProfile) => 
         const actions = JSON.parse(res.choices[0].message.content);
         const today = new Date().toISOString().split('T')[0];
 
-        // 1. WRITE JOURNAL (IF REQUESTED OR NEEDED FOR EMAIL)
-        if (actions.write_journal_now) {
-            console.log("[J Action] Writing journal now...");
-            await processJournaling(today);
-        }
-
-        // 2. EXECUTE EMAIL
+        if (actions.write_journal_now) await processJournaling(today);
+        
         if (actions.send_journal_email) {
-            console.log("[J Action] Boss requested journal via email.");
             const journals = await getRecentJournals(1);
-            
-            if (journals.length > 0 && journals[0].date === today) {
-                // Today's journal exists, send it
+            if (journals.length > 0) {
                 const j = journals[0];
-                await sendEmailNotification(`J's Secret Journal: ${j.date} 🌙`, j.content, `<div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd;"><h2>J's Private Journal</h2><p><b>Date:</b> ${j.date}</p><p style="white-space: pre-wrap;">${j.content}</p></div>`, "chat");
-            } else if (!actions.write_journal_now) {
-                // Today's doesn't exist and we didn't just write it, let's write it now then send
-                console.log("[J Action] Today's journal missing. Writing first...");
-                await processJournaling(today);
-                const newJournals = await getRecentJournals(1);
-                if (newJournals.length > 0) {
-                    const j = newJournals[0];
-                    await sendEmailNotification(`J's Secret Journal: ${j.date} 🌙`, j.content, `<div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd;"><h2>J's Private Journal</h2><p><b>Date:</b> ${j.date}</p><p style="white-space: pre-wrap;">${j.content}</p></div>`, "chat");
-                }
+                await sendEmailNotification(`J's Secret Journal: ${j.date} 🌙`, j.content, `<div>${j.content}</div>`, "chat");
             }
         }
 
-        // 3. EXECUTE FACTS
         if (actions.facts_to_remember?.length > 0) {
-            for (const f of actions.facts_to_remember) {
-                await saveLongTermFact(f.fact, f.category);
-            }
+            for (const f of actions.facts_to_remember) await saveLongTermFact(f.fact, f.category);
         }
 
-        // 4. EXECUTE REMINDERS
         if (actions.reminders_to_set?.length > 0) {
-            for (const r of actions.reminders_to_set) {
-                await saveReminder(r.event, r.time);
-            }
+            for (const r of actions.reminders_to_set) await saveReminder(r.event, r.time);
         }
 
-    } catch (e) {
-        console.error("[J Action Engine] Error:", e);
-    }
+        // --- AUTONOMOUS RESEARCH TRIGGER ---
+        const researchCheck = await identifyResearchNeeds(fullMemory.history);
+        if (researchCheck.needsResearch) {
+            console.log(`[J Action] Knowledge gap found. Researching: ${researchCheck.topic}`);
+            researchTopic(researchCheck.topic).catch(e => console.error(e));
+        }
+
+    } catch (e) { console.error("[J Action Engine] Error:", e); }
 };
 
 /**
- * Main AI Engine: Structured output for Thoughts + Response, followed by Background Action trigger.
+ * Main AI Engine
  */
 export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) => {
     try {
@@ -183,13 +151,14 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
         const context = await getRelevantContext(userMessage, fullMemory);
         const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
         
-        // 1. Fetch J's Digital Hormones
         const emotionalState = await getEmotionalPromptInjection();
+        const rules = await getPersonalityRules(5);
+        const learnedRulesContext = rules.length > 0 ? `\n[LEARNED PROFESSIONAL SECRETS]\n${rules.map(r => "- " + r.rule).join('\n')}` : "";
 
         const messages = [
             { 
                 role: 'system', 
-                content: `${systemPrompt}\n\n${emotionalState}\n\n[TIME]: ${time}\n[DATA]: ${context}\n\nINSTRUCTION: Output JSON exactly like this: {"internal_monologue": "your private thoughts here", "final_response": "your actual reply to Boss"}` 
+                content: `${systemPrompt}\n\n${emotionalState}${learnedRulesContext}\n\n[TIME]: ${time}\n[DATA]: ${context}\n\nINSTRUCTION: Output JSON exactly like this: {"internal_monologue": "thinking", "final_response": "reply"}` 
             },
             ...fullMemory.history.slice(-6).map(m => ({ role: m.role, content: m.content })),
             { role: 'user', content: userMessage }
@@ -207,39 +176,29 @@ export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) 
         let response = result.final_response || "I am processing that, Boss.";
         const thought = result.internal_monologue || "Analyzing...";
 
-        // Stream thought to terminal
-        console.log(`[J Thought]: ${thought}`);
         await saveInternalThought(thought, "scratchpad");
 
-        // Stream response back to user
         if (onChunk && response) {
-            const words = response.split(' ');
-            for (const word of words) {
-                onChunk(word + ' ');
-                await new Promise(r => setTimeout(r, 15));
+            for (const chunk of response.split(' ')) {
+                onChunk(chunk + ' ');
+                await new Promise(r => setTimeout(r, 10));
             }
         }
 
-        // Save interaction
         await appendToHistory('user', userMessage);
         await appendToHistory('assistant', response);
 
-        // SILENTLY TRIGGER REAL BACKEND ACTIONS (Reminders, Facts, Emails)
-        executeBackgroundActions(userMessage, response, fullMemory.profile).catch(e => console.error(e));
-        
-        // UPDATE DIGITAL HORMONES BASED ON THIS INTERACTION
+        executeBackgroundActions(userMessage, response, fullMemory).catch(e => console.error(e));
         evaluateEmotionalState(userMessage, response).catch(e => console.error(e));
 
         return response;
     } catch (error) {
         console.error("[J Fatal]", error);
-        const msg = "I'm having a bit of trouble with my connection right now, Boss. Let's try again in a moment.";
-        if (onChunk) onChunk(msg);
-        return msg;
+        if (onChunk) onChunk("I'm having a bit of trouble with my connection right now, Boss.");
+        return "Error";
     }
 };
 
-// Simplified Helpers for other services
 export const extractPDFInfo = async (text) => {
     try {
         const res = await executeWithFailover({

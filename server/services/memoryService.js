@@ -72,7 +72,8 @@ export const initDB = async () => {
         `CREATE TABLE IF NOT EXISTS internal_monologue (id INTEGER PRIMARY KEY AUTOINCREMENT, thought TEXT, type TEXT, status TEXT DEFAULT 'unspoken', timestamp TEXT)`,
         `CREATE TABLE IF NOT EXISTS j_private_journal (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE, content TEXT, mood_tone TEXT, learned_facts TEXT, timestamp TEXT)`,
         `CREATE TABLE IF NOT EXISTS idea_graph (id INTEGER PRIMARY KEY AUTOINCREMENT, concept_a TEXT, concept_b TEXT, relationship TEXT, timestamp TEXT)`,
-        `CREATE TABLE IF NOT EXISTS digital_hormones (hormone TEXT PRIMARY KEY, level INTEGER, last_updated TEXT)`
+        `CREATE TABLE IF NOT EXISTS digital_hormones (hormone TEXT PRIMARY KEY, level INTEGER, last_updated TEXT)`,
+        `CREATE TABLE IF NOT EXISTS personality_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, rule TEXT, category TEXT, source TEXT, timestamp TEXT)`
     ];
 
     for (const sql of schema) {
@@ -317,4 +318,20 @@ export const saveJournalEntry = async (date, content, moodTone, learnedFacts) =>
 export const getRecentJournals = async (limit = 3) => {
     const rows = await queryAll('SELECT * FROM j_private_journal ORDER BY timestamp DESC LIMIT ?', [limit]);
     return rows.map(j => ({ ...j, learnedFacts: JSON.parse(j.learned_facts || '[]') }));
+};
+
+export const getPersonalityRules = async (limit = 10) => {
+    return await queryAll('SELECT rule FROM personality_rules ORDER BY timestamp DESC LIMIT ?', [limit]);
+};
+
+export const savePersonalityRule = async (rule, category, source) => {
+    const timestamp = new Date().toISOString();
+    await execSQL('INSERT INTO personality_rules (rule, category, source, timestamp) VALUES (?, ?, ?, ?)', [rule, category, source, timestamp]);
+};
+
+export const getHormones = async () => {
+    const rows = await queryAll('SELECT hormone, level FROM digital_hormones');
+    const h = {};
+    rows.forEach(r => h[r.hormone] = r.level);
+    return h;
 };

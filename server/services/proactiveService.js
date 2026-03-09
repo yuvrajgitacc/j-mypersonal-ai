@@ -2,6 +2,7 @@ import { getMemoryCache, appendToHistory, getRelationshipStats, getAssociativeCo
 import { executeWithFailover } from './aiService.js';
 import { systemPrompt } from '../config/systemPrompt.js';
 import { sendNotificationToCenter, sendJournalEmail, sendEmailNotification } from './emailService.js';
+import { selfEvaluatePersonality } from './metaLearningService.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -9,6 +10,13 @@ dotenv.config();
 let lastNudgeTime = 0;
 let isJournalingInProgress = false;
 let userRequestedJournaling = false;
+
+/**
+ * Weekly Personality Upgrade Trigger
+ */
+export const runWeeklySelfEvaluation = async () => {
+    await selfEvaluatePersonality();
+};
 
 export const manualTriggerJournaling = () => {
     userRequestedJournaling = true;
