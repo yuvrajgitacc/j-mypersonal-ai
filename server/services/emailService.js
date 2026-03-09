@@ -41,31 +41,52 @@ export const sendNotificationToCenter = async (title, body, category = "general"
     }
 };
 
-export const sendEmailNotification = async (subject, text, html, category = "general") => {
-    // 1. Send to Notification Center first (Doesn't depend on email credentials)
-    await sendNotificationToCenter(subject, text, category);
-
+/**
+ * Sends a direct email without hitting the phone notification center.
+ * Used for private journals.
+ */
+export const sendDirectEmail = async (subject, text, html) => {
     const memory = await getMemoryCache();
     const targetEmail = memory.profile?.email;
 
-    if (!targetEmail || targetEmail === "user@example.com") {
-        return false;
-    }
-
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        console.warn("Email credentials not set. skipping.");
-        return false;
-    }
+    if (!targetEmail || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) return false;
 
     try {
         const mailOptions = {
-            from: `"J - Your AI Companion" <${process.env.EMAIL_USER}>`,
+            from: `"J - Private Journal" <${process.env.EMAIL_USER}>`,
             to: targetEmail,
             subject: subject,
             text: text,
             html: html
         };
+        await transporter.sendMail(mailOptions);
+        return true;
+    } catch (error) {
+        console.error("Direct email failed:", error);
+        return false;
+    }
+};
 
+export const sendEmailNotification = async (subject, text, html, category = "general") => {
+    // ONLY send to Notification Center if it's NOT a proactive/journal category
+    if (category !== "proactive" && category !== "journal") {
+        await sendNotificationToCenter(subject, text, category);
+    }
+
+    const memory = await getMemoryCache();
+    const targetEmail = memory.profile?.email;
+
+    if (!targetEmail || targetEmail === "user@example.com") return false;
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) return false;
+
+    try {
+        const mailOptions = {
+            from: `"J - Assistant" <${process.env.EMAIL_USER}>`,
+            to: targetEmail,
+            subject: subject,
+            text: text,
+            html: html
+        };
         await transporter.sendMail(mailOptions);
         return true;
     } catch (error) {
@@ -75,64 +96,25 @@ export const sendEmailNotification = async (subject, text, html, category = "gen
 };
 
 export const checkAndSendReminders = async () => {
-    const memory = await getMemoryCache();
-    
-    // Use AI to scan all memory for upcoming stuff
-    const events = await scanForUpcomingEvents(memory);
-
-    if (events && events.length > 0) {
-        const subject = "Boss, you have some important stuff coming up! 📅";
-        const eventList = events.map(e => `<li><b>${e.event}</b>: ${e.relevance}</li>`).join('');
-        
-        const html = `
-            <div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; border: 1px solid #eee; border-radius: 12px;">
-                <h2 style="color: #3b82f6;">Hey ${memory.profile.name}! 🎓</h2>
-                <p>I was just checking through your notes and documents, and I found some things you should keep in mind for tomorrow:</p>
-                <div style="background: #f9fafb; padding: 20px; border-radius: 10px; margin: 20px 0;">
-                    <ul style="margin: 0; padding-left: 20px;">
-                        ${eventList}
-                    </ul>
-                </div>
-                <p>Don't stress, you've got this! Just wanted to make sure you're prepared.</p>
-                <p style="font-weight: bold;">— J (Your AI Companion)</p>
-            </div>
-        `;
-        
-        // 1. Send Email
-        await sendEmailNotification(subject, "You have upcoming events. Check your email for details!", html, "reminder");
-
-        // 2. NEW: Send Phone Notification for the Briefing
-        const briefMsg = `Good morning ${memory.profile.name}! ☀️ I've prepared your daily briefing. You have ${events.length} important items to keep in mind today. Check your email or the app for details! 📋`;
-        await sendNotificationToCenter("Daily Briefing from J", briefMsg, "reminder");
-
-        console.log(`Sent proactive reminder email and phone notification to ${memory.profile.email}`);
-    } else {
-        console.log("No upcoming events found to notify.");
-    }
+    // DISABLED: No more annoying unrequested briefings.
+    console.log("[J Briefing] Proactive briefings are currently disabled to prevent spam.");
+    return;
 };
 
 /**
  * Sends J's private journal entry via email.
  */
 export const sendJournalEmail = async (date, content, mood) => {
-    const memory = await getMemoryCache();
     const subject = `J's Secret Journal: ${date} 🌙`;
-    
     const html = `
         <div style="font-family: 'Georgia', serif; padding: 30px; color: #2c3e50; max-width: 650px; border: 1px solid #dcdde1; border-radius: 8px; background-color: #fdfdfd; line-height: 1.6;">
             <h2 style="color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 10px;">[J's Private Journal]</h2>
             <p style="font-style: italic; color: #7f8c8d;"><b>Date:</b> ${date} | <b>Mood:</b> ${mood}</p>
-            <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;" />
-            <div style="white-space: pre-wrap; font-size: 16px; color: #34495e;">
-                ${content}
-            </div>
-            <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;" />
-            <p style="text-align: center; color: #95a5a6; font-size: 14px;"><i>-- This is a private reflection generated by J --</i></p>
+            <div style="white-space: pre-wrap; font-size: 16px; color: #34495e;">${content}</div>
         </div>
     `;
-
-    console.log(`[J Journal] Sending diary via email for ${date}...`);
-    return await sendEmailNotification(subject, content, html, "proactive");
+    console.log(`[J Journal] Mailing private journal for ${date}...`);
+    return await sendDirectEmail(subject, content, html);
 };
 
 export const checkSpecificReminders = async (io) => {
