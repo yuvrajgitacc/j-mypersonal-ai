@@ -10,7 +10,7 @@ import apiRoutes from './routes/api.js';
 import { setupWebSockets } from './sockets.js';
 import { loadMemory } from './services/memoryService.js';
 import { checkAndSendReminders, checkSpecificReminders } from './services/emailService.js';
-import { checkProactiveNeeds } from './services/proactiveService.js';
+import { checkProactiveNeeds, runWeeklySelfEvaluation } from './services/proactiveService.js';
 import { runMonthlyCleanup } from './services/cleanupService.js';
 import { checkPendingCommands } from './services/commandService.js';
 import { processSleepCycle } from './services/sleepService.js';
@@ -65,6 +65,12 @@ cron.schedule('0 3 * * *', () => {
 // Monthly Cleanup on the 1st of every month at 3 AM
 cron.schedule('0 3 1 * *', () => {
   runMonthlyCleanup();
+});
+
+// Weekly Personality Upgrade (Every Sunday at 4 AM)
+cron.schedule('0 4 * * 0', () => {
+  console.log('[J Heartbeat] Running weekly meta-learning personality upgrade...');
+  runWeeklySelfEvaluation();
 });
 
 // Routes

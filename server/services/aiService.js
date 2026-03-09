@@ -19,11 +19,16 @@ import { processJournaling } from './proactiveService.js';
 import { systemPrompt } from '../config/systemPrompt.js';
 import { evaluateEmotionalState, getEmotionalPromptInjection } from './emotion/emotionEngine.js';
 import { identifyResearchNeeds, researchTopic } from './researchService.js';
+import { proposeSelfImprovement, applySelfImprovement } from './codeService.js';
 import Groq from 'groq-sdk';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Global variable to hold the last proposed upgrade for J
+let lastProposedUpgrade = null;
+
+// 1. Unified API Key Management
 const groqKeys = [
     process.env.GROQ_API_KEY_1,
     process.env.GROQ_API_KEY_2,
@@ -35,6 +40,9 @@ const groqKeys = [
 
 let currentKeyIndex = 0;
 
+/**
+ * Master API Caller: Rotates keys on ANY error and fallbacks to 8B instantly if 70B is limited.
+ */
 export const executeWithFailover = async (params, allowModelFallback = true) => {
     let attempts = 0;
     const totalKeys = groqKeys.length;
@@ -58,6 +66,7 @@ export const executeWithFailover = async (params, allowModelFallback = true) => 
                 currentKeyIndex = (currentKeyIndex + 1) % totalKeys;
                 attempts++;
                 if (attempts >= totalKeys && modelIs70B && allowModelFallback) {
+                    console.warn("[J Brain] 70B Exhausted. Switching to 8B Safety Net...");
                     params.model = "llama-3.1-8b-instant";
                     modelIs70B = false;
                 }
@@ -84,6 +93,9 @@ export const getRelevantContext = async (userMessage, memory) => {
     return "No specific documents loaded.";
 };
 
+/**
+ * BACKGROUND ACTION ENGINE (The Real Secretary Logic)
+ */
 const executeBackgroundActions = async (userMessage, jResponse, fullMemory) => {
     try {
         console.log("[J Action Engine] Scanning conversation...");
@@ -91,12 +103,24 @@ const executeBackgroundActions = async (userMessage, jResponse, fullMemory) => {
         Boss: "${userMessage}"
         J: "${jResponse}"
         Current Profile: ${JSON.stringify(fullMemory.profile)}
+        Pending Upgrade Available: ${lastProposedUpgrade ? 'YES' : 'NO'}
         
+        [RULES]
+        1. send_journal_email: true if Boss asked for journal/diary.
+        2. send_generic_email: if Boss asked to send a specific message.
+        3. update_profile: if Boss provided a new name, email, or preference.
+        4. propose_self_upgrade: true if J mentioned studying her own code or proposing a new feature.
+        5. apply_pending_upgrade: true ONLY if Boss said "Yes", "Go ahead", or "Apply it" to a proposal.
+        6. facts_to_remember: extract explicit facts.
+        7. reminders_to_set: extract reminders.
+
         Return JSON:
         {
             "send_journal_email": boolean,
             "send_generic_email": {"requested": boolean, "subject": "str", "body": "str"},
             "update_profile": {"requested": boolean, "updates": {"name": "str", "email": "str"}},
+            "propose_self_upgrade": boolean,
+            "apply_pending_upgrade": boolean,
             "write_journal_now": boolean,
             "facts_to_remember": [{"fact": "str", "category": "str"}],
             "reminders_to_set": [{"event": "str", "time": "str"}]
@@ -112,30 +136,63 @@ const executeBackgroundActions = async (userMessage, jResponse, fullMemory) => {
         const actions = JSON.parse(res.choices[0].message.content);
         const today = new Date().toISOString().split('T')[0];
 
+        // 1. UPDATE PROFILE
         if (actions.update_profile?.requested) {
             console.log("[J Action] Updating profile records...");
             await saveMemory({ profile: actions.update_profile.updates });
         }
+
+        // 2. SELF-MODIFICATION ENGINE
+        if (actions.propose_self_upgrade) {
+            console.log("[J Action] J is studying her own code...");
+            const proposal = await proposeSelfImprovement();
+            if (proposal) {
+                lastProposedUpgrade = proposal;
+                console.log(`[J Action] Proposal generated: ${proposal.featureName}`);
+            }
+        }
+
+        if (actions.apply_pending_upgrade && lastProposedUpgrade) {
+            console.log("[J Action] Applying self-modification...");
+            const result = await applySelfImprovement(lastProposedUpgrade);
+            if (result.success) {
+                lastProposedUpgrade = null;
+                console.log("[J Action] SELF-UPGRADE SUCCESSFUL.");
+            }
+        }
+
+        // 3. WRITE JOURNAL
         if (actions.write_journal_now) await processJournaling(today);
+        
+        // 4. SEND JOURNAL
         if (actions.send_journal_email) {
             const journals = await getRecentJournals(1);
             if (journals.length > 0) await sendJournalEmail(journals[0].date, journals[0].content, journals[0].mood_tone);
         }
+
+        // 5. SEND GENERIC EMAIL
         if (actions.send_generic_email?.requested) {
-            console.log(`[J Action] Sending requested email: ${actions.send_generic_email.subject}`);
             await sendEmailNotification(actions.send_generic_email.subject, actions.send_generic_email.body, `<div>${actions.send_generic_email.body}</div>`, "general");
         }
+
+        // 6. FACTS & REMINDERS
         if (actions.facts_to_remember?.length > 0) {
             for (const f of actions.facts_to_remember) await saveLongTermFact(f.fact, f.category);
         }
         if (actions.reminders_to_set?.length > 0) {
             for (const r of actions.reminders_to_set) await saveReminder(r.event, r.time);
         }
+
+        // 7. RESEARCH
         const researchCheck = await identifyResearchNeeds(fullMemory.history);
         if (researchCheck.needsResearch) researchTopic(researchCheck.topic).catch(e => console.error(e));
+
     } catch (e) { console.error("[J Action Engine] Error:", e); }
 };
 
+/**
+ * Main AI Engine
+ */
 export const generateAIResponse = async (userMessage, onChunk, onReminderSaved) => {
     try {
         const fullMemory = await getMemoryCache();
