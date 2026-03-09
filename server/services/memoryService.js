@@ -81,6 +81,19 @@ export const initDB = async () => {
             db.exec(sql);
         }
     }
+
+    // --- MIGRATION: ADD full_content COLUMN IF MISSING ---
+    try {
+        console.log("Running Database Migrations...");
+        if (isCloud) {
+            await db.execute("ALTER TABLE pdf_extractions ADD COLUMN full_content TEXT").catch(() => {});
+        } else {
+            db.exec("ALTER TABLE pdf_extractions ADD COLUMN full_content TEXT");
+        }
+    } catch (e) {
+        // Column likely already exists
+    }
+
     console.log("Database initialized successfully.");
 };
 
